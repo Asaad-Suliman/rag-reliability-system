@@ -1,0 +1,180 @@
+"""The single error shape defined by API Contract §1.1.
+
+Every 4xx and 5xx leaves the app as
+`{"error": {"code", "message", "request_id", "details"}}` — never a traceback,
+never a raw FastAPI validation dump.
+"""
+
+from __future__ import annotations
+
+import logging
+from enum import StrEnum
+from typing import Any
+
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+
+from app.core.middleware import REQUEST_ID_HEADER, get_request_id
+
+logger = logging.getLogger(__name__)
+
+
+class ErrorCode(StrEnum):
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    FORBIDDEN = "FORBIDDEN"
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
+    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+    UNSUPPORTED_MEDIA = "UNSUPPORTED_MEDIA"
+    RATE_LIMITED = "RATE_LIMITED"
+    UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+_STATUS_TO_CODE: dict[int, ErrorCode] = {
+    401: ErrorCode.UNAUTHENTICATED,
+    403: ErrorCode.FORBIDDEN,
+    404: ErrorCode.NOT_FOUND,
+    409: ErrorCode.CONFLICT,
+    413: ErrorCode.PAYLOAD_TOO_LARGE,
+    415: ErrorCode.UNSUPPORTED_MEDIA,
+    422: ErrorCode.VALIDATION_ERROR,
+    429: ErrorCode.RATE_LIMITED,
+    503: ErrorCode.UPSTREAM_UNAVAILABLE,
+}
+
+
+def code_for_status(status_code: int) -> ErrorCode:
+    """Map an HTTP status onto a contract code.
+
+    Unmapped 4xx (405, 406, ...) become VALIDATION_ERROR: the contract defines no
+    generic client-error code, and inventing one is a breaking contract change.
+    """
+    if status_code in _STATUS_TO_CODE:
+        return _STATUS_TO_CODE[status_code]
+    return ErrorCode.VALIDATION_ERROR if status_code < 500 else ErrorCode.INTERNAL_ERROR
+
+
+class AppError(Exception):
+    """Raise this anywhere to produce a contract-shaped error response."""
+
+    def __init__(
+        self,
+        code: ErrorCode,
+        status_code: int,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.message = message
+        self.details = details or {}
+
+
+def request_id_of(request: Request) -> str:
+    """Prefer request.state — the 500 handler runs after the contextvar is reset."""
+    state_id: str | None = getattr(request.state, "request_id", None)
+    return state_id or get_request_id()
+
+
+def error_response(
+    request: Request,
+    *,
+    code: ErrorCode,
+    status_code: int,
+    message: str,
+    details: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    request_id = request_id_of(request)
+    response_headers = {REQUEST_ID_HEADER: request_id}
+    if headers:
+        response_headers.update(headers)
+    return JSONResponse(
+        status_code=status_code,
+        headers=response_headers,
+        content={
+            "error": {
+                "code": code.value,
+                "message": message,
+                "request_id": request_id,
+                "details": details or {},
+            }
+        },
+    )
+
+
+async def app_error_handler(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, AppError):  # pragma: no cover - registration guarantees the type
+        return await unhandled_exception_handler(request, exc)
+    return error_response(
+        request,
+        code=exc.code,
+        status_code=exc.status_code,
+        message=exc.message,
+        details=exc.details,
+    )
+
+
+async def validation_exception_handler(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, RequestValidationError):  # pragma: no cover
+        return await unhandled_exception_handler(request, exc)
+    fields: dict[str, str] = {}
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error["loc"][1:]) or str(error["loc"][0])
+        fields[location] = str(error["msg"])
+    return error_response(
+        request,
+        code=ErrorCode.VALIDATION_ERROR,
+        status_code=422,
+        message="Request validation failed.",
+        details={"fields": fields},
+    )
+
+
+async def http_exception_handler(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, StarletteHTTPException):  # pragma: no cover
+        return await unhandled_exception_handler(request, exc)
+    headers = dict(exc.headers) if exc.headers else None
+    return error_response(
+        request,
+        code=code_for_status(exc.status_code),
+        status_code=exc.status_code,
+        message=str(exc.detail),
+        headers=headers,
+    )
+
+
+async def unhandled_exception_handler(request: Request, exc: Exception) -> Response:
+    """Last resort: log the traceback server-side, return only the request id."""
+    request_id = request_id_of(request)
+    logger.error(
+        "unhandled exception",
+        # This handler runs in ServerErrorMiddleware, outside RequestIDMiddleware,
+        # so the contextvar is already reset — pass the id explicitly or the one
+        # log line that matters loses its correlation to the client's response.
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "method": request.method,
+        },
+        exc_info=exc,
+    )
+    return error_response(
+        request,
+        code=ErrorCode.INTERNAL_ERROR,
+        status_code=500,
+        message="An internal error occurred.",
+    )
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
