@@ -1,0 +1,27 @@
+# Install once per clone:  uv run pre-commit install
+# Run against everything:  uv run pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      # System gitleaks (8.28) instead of the upstream hook: the upstream one
+      # builds from source and needs a Go toolchain we do not have.
+      - id: gitleaks
+        name: gitleaks (scan staged changes for secrets)
+        entry: gitleaks git --staged --no-banner --redact --verbose
+        language: system
+        pass_filenames: false
+
+      # Runs inside the project venv so it sees the same dependencies as the app.
+      - id: mypy
+        name: mypy (app/)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
