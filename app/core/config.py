@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr
     llm_model: str = "claude-sonnet-5"
 
+    # --- embedding provider (required) ---
+    voyage_api_key: SecretStr
+    voyage_model: str = "voyage-4-lite"
+    voyage_dimensions: int = 1024
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
