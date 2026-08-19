@@ -10,5 +10,9 @@ class Base(DeclarativeBase):
 
 
 # Importing model modules here registers their tables on Base.metadata.
-# Nothing to import yet — the first models arrive in Step 04.
+# The import is for its side effect (table registration on Base.metadata),
+# not for the names — Alembic autogenerate and CLI code that instantiates
+# models import from app.db.models directly.
+from app.db import models as models  # noqa: E402,F401
+
 metadata = Base.metadata
