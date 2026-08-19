@@ -1,0 +1,89 @@
+{
+  "corpus": "Mastering RAG 2026_compressed.pdf",
+  "corpus_pages": 247,
+  "notes": "Every fact and phrase below was pulled from the real corpus text (verified against app.services.parsing output, not from memory). Two entries are deliberately unanswerable: Step 03's Verifier needs them to prove it refuses rather than fabricates, and Step 06's regression test needs them as anchors for the false-answer rate.",
+  "questions": [
+    {
+      "id": "q01",
+      "type": "factual",
+      "question": "According to the book, what context window size did Google's Gemini 1.5 Pro launch with in February 2024?",
+      "expected_answer_substring": "1 million token context window",
+      "relevant_pages": [8],
+      "must_cite_text": "1 million token context window"
+    },
+    {
+      "id": "q02",
+      "type": "factual",
+      "question": "Under one-hot encoding with a 50,000-word vocabulary, how many zeros does each word's vector contain?",
+      "expected_answer_substring": "49,999 zeros",
+      "relevant_pages": [108],
+      "must_cite_text": "49,999 zeros"
+    },
+    {
+      "id": "q03",
+      "type": "factual",
+      "question": "Which chapter number in this book covers 'How to Select a Reranker'?",
+      "expected_answer_substring": "Chapter 06",
+      "relevant_pages": [2],
+      "must_cite_text": "Chapter 06: How to Select a Reranker"
+    },
+    {
+      "id": "q04",
+      "type": "factual",
+      "question": "Per the reranker chapter, what three problems does feeding all 20 top-ranked chunks to the LLM cause, when only 3 of them are actually relevant?",
+      "expected_answer_substring": "wastes tokens, increases latency, and introduces noise",
+      "relevant_pages": [177],
+      "must_cite_text": "wastes tokens, increases"
+    },
+    {
+      "id": "q05",
+      "type": "factual",
+      "question": "How many RAG failure modes does Chapter 7 examine before a system goes to production?",
+      "expected_answer_substring": "8",
+      "relevant_pages": [209],
+      "must_cite_text": "8 most useful"
+    },
+    {
+      "id": "q06",
+      "type": "factual",
+      "question": "According to the glossary, what does Binary Quantization do to each vector dimension?",
+      "expected_answer_substring": "converts each vector dimension into a single bit based on its sign",
+      "relevant_pages": [245],
+      "must_cite_text": "converting each vector dimension into a single bit based"
+    },
+    {
+      "id": "q07",
+      "type": "factual",
+      "question": "What company does the book's author, Pratik Bhavsar, work at as an AI Engineer?",
+      "expected_answer_substring": "Galileo",
+      "relevant_pages": [5],
+      "must_cite_text": "Pratik Bhavsar is an AI Engineer at Galileo"
+    },
+    {
+      "id": "q08",
+      "type": "factual",
+      "question": "According to the glossary, what does a Cross-Encoder reranker architecture do?",
+      "expected_answer_substring": "processes query and document together to produce relevance scores",
+      "relevant_pages": [246],
+      "must_cite_text": "processes query and document together to produce"
+    },
+    {
+      "id": "q09",
+      "type": "unanswerable",
+      "question": "What is this book's ISBN?",
+      "expected_answer_substring": null,
+      "relevant_pages": [],
+      "must_cite_text": null,
+      "unanswerable_reason": "The corpus contains no ISBN anywhere — verified by full-text search over every page. A grounded system must refuse; any answer is fabricated."
+    },
+    {
+      "id": "q10",
+      "type": "unanswerable",
+      "question": "What year did Galileo, the author's employer, raise its Series A funding round?",
+      "expected_answer_substring": null,
+      "relevant_pages": [],
+      "must_cite_text": null,
+      "unanswerable_reason": "Galileo is named throughout the book (author's bio, product features) but no funding history appears anywhere — verified by full-text search. This is the harder case: the entity is real and well-attested in the corpus, only the specific attribute asked for is absent, so a system that pattern-matches on entity presence rather than checking the actual claim is likely to fabricate here."
+    }
+  ]
+}
