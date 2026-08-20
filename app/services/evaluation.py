@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.embeddings import Embedder
@@ -30,9 +31,117 @@ from app.services.retrieval import (
 )
 from app.services.vector_store import VectorStore
 
-GOLDEN_SET_PATH = Path("tests/fixtures/golden_set.json")
+GOLDEN_SET_PATH = Path("tests/fixtures/golden_set_v3.json")
 QUERY_EMBEDDINGS_CACHE_PATH = Path("tests/fixtures/query_embeddings.json")
 RECALL_KS = (5, 10)
+
+
+class GoldenSetError(RuntimeError):
+    """A golden set could not be resolved against the live corpus.
+
+    Always raised, never swallowed: a gold set that silently resolves to the
+    wrong chunks produces plausible metrics that are quietly meaningless, which
+    is strictly worse than a run that stops.
+    """
+
+
+@dataclass(frozen=True)
+class GoldenEntry:
+    """One golden-set entry, normalised across schema versions.
+
+    `spans` are (char_start, char_end) pairs into the document's canonical text.
+    Gold chunk ids are *not* stored here and never read from the fixture — they
+    are resolved from these spans at evaluation time (see
+    `resolve_gold_chunk_ids`). v2 recorded `chunk_ids` directly, which are
+    `chk_` ULIDs minted fresh on every ingest, so a single reindex silently
+    zeroed the gold set while the metrics kept reporting numbers.
+    """
+
+    id: str
+    question: str
+    answerable: bool
+    document_id: str
+    spans: tuple[tuple[int, int], ...]
+
+
+def load_golden_set(path: Path) -> list[GoldenEntry]:
+    """Read v2 or v3 into one shape. v2 is still loadable so the v2 -> v3 delta
+    can be measured on identical scoring code — otherwise a change in the
+    numbers could be the benchmark or the harness, and we could not tell which.
+    """
+    raw: dict[str, Any] = json.loads(path.read_text())
+    version = raw.get("version")
+    spans: tuple[tuple[int, int], ...]
+
+    if version == 3:
+        entries = []
+        for e in raw["entries"]:
+            spans = (
+                ((e["char_start"], e["char_end"]),)
+                if e["answerable"]
+                else ((e["near_miss_to"]["char_start"], e["near_miss_to"]["char_end"]),)
+            )
+            entries.append(
+                GoldenEntry(e["id"], e["question"], e["answerable"], e["document_id"], spans)
+            )
+        return entries
+
+    if version == 2:
+        doc = raw["corpus"]["document_id"]
+        entries = []
+        for q in raw["questions"]:
+            answerable = q["type"] != "unanswerable"
+            spans = tuple((ev["char_start"], ev["char_end"]) for ev in q.get("evidence", []))
+            entries.append(GoldenEntry(q["id"], q["question"], answerable, doc, spans))
+        return entries
+
+    raise GoldenSetError(f"{path}: unsupported golden set version {version!r}")
+
+
+async def resolve_gold_chunk_ids(
+    session: AsyncSession, entries: list[GoldenEntry]
+) -> dict[str, set[str]]:
+    """Map each entry id to the chunk ids its spans fall inside.
+
+    Exact rather than approximate: `chunking.py` guarantees
+    `canonical_text[c.char_start:c.char_end] == c.text`, so a span contained in
+    a chunk is genuinely that chunk's text. Chunks do not tile the canonical
+    text (246 of 259 consecutive pairs have gaps), so a span that crosses a
+    boundary has no owner — that raises rather than resolving to nothing.
+    """
+    by_doc: dict[str, list[Any]] = {}
+    for doc in {e.document_id for e in entries}:
+        by_doc[doc] = list(
+            (
+                await session.execute(
+                    text(
+                        "SELECT id, char_start, char_end FROM chunks "
+                        "WHERE document_id = :d ORDER BY char_start"
+                    ),
+                    {"d": doc},
+                )
+            ).all()
+        )
+        if not by_doc[doc]:
+            raise GoldenSetError(f"no chunks in the live corpus for document {doc!r}")
+
+    resolved: dict[str, set[str]] = {}
+    for entry in entries:
+        ids: set[str] = set()
+        for start, end in entry.spans:
+            owners = [
+                c for c in by_doc[entry.document_id] if c.char_start <= start and c.char_end >= end
+            ]
+            if not owners:
+                raise GoldenSetError(
+                    f"{entry.id}: span [{start},{end}) is not contained in any chunk of "
+                    f"{entry.document_id} — it crosses a chunk boundary or falls outside the corpus"
+                )
+            ids.add(owners[0].id)
+        if entry.answerable and not ids:
+            raise GoldenSetError(f"{entry.id}: answerable entry resolved to no gold chunks")
+        resolved[entry.id] = ids
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -124,6 +233,12 @@ class EvaluationReport:
     abstention_scores: dict[str, float]  # unanswerable question id -> top-1 rrf_score
     rrf_k: int
     candidate_k: int
+    golden_set_path: str
+    golden_set_version: int
+    # Carried explicitly so a report can never be read as covering more
+    # questions than it scored. recall/MRR are answerable-only by construction.
+    n_answerable: int
+    n_unanswerable: int
 
 
 async def evaluate(
@@ -147,12 +262,15 @@ async def evaluate(
     makes zero network calls — see `load_query_vectors`'s docstring for the
     `allow_network` gate.
     """
-    golden_set: dict[str, Any] = json.loads(golden_set_path.read_text())
-    questions: list[dict[str, Any]] = golden_set["questions"]
-    answerable = [q for q in questions if q["type"] != "unanswerable"]
-    unanswerable = [q for q in questions if q["type"] == "unanswerable"]
+    version = int(json.loads(golden_set_path.read_text()).get("version", 0))
+    entries = load_golden_set(golden_set_path)
+    # The split is read off the schema, never inferred from a type string:
+    # unanswerable entries must never enter recall or MRR.
+    answerable = [e for e in entries if e.answerable]
+    unanswerable = [e for e in entries if not e.answerable]
+    gold_by_id = await resolve_gold_chunk_ids(session, entries)
 
-    questions_by_id = {q["id"]: q["question"] for q in questions}
+    questions_by_id = {e.id: e.question for e in entries}
     vectors = await load_query_vectors(
         questions_by_id, embedder, cache_path, allow_network=allow_network
     )
@@ -162,9 +280,9 @@ async def evaluate(
     hybrid_scores: list[tuple[dict[int, float], float]] = []
 
     for q in answerable:
-        query = q["question"]
-        gold = {cid for ev in q["evidence"] for cid in ev["chunk_ids"]}
-        query_vector = vectors[q["id"]]
+        query = q.question
+        gold = gold_by_id[q.id]
+        query_vector = vectors[q.id]
 
         lexical_hits = await lexical_search(session, query, candidate_k, None)
         vector_hits = await vector_search(
@@ -187,18 +305,17 @@ async def evaluate(
 
     abstention_scores: dict[str, float] = {}
     for q in unanswerable:
-        query = q["question"]
         hits = await retrieve(
-            query,
+            q.question,
             session,
             vector_store,
             embedder,
             top_k=1,
             candidate_k=candidate_k,
-            query_vector=vectors[q["id"]],
+            query_vector=vectors[q.id],
             rrf_k=rrf_k,
         )
-        abstention_scores[q["id"]] = hits[0].rrf_score if hits else 0.0
+        abstention_scores[q.id] = hits[0].rrf_score if hits else 0.0
 
     return EvaluationReport(
         lexical=_aggregate(lexical_scores),
@@ -207,12 +324,20 @@ async def evaluate(
         abstention_scores=abstention_scores,
         rrf_k=rrf_k,
         candidate_k=candidate_k,
+        golden_set_path=str(golden_set_path),
+        golden_set_version=version,
+        n_answerable=len(answerable),
+        n_unanswerable=len(unanswerable),
     )
 
 
 def format_report(report: EvaluationReport) -> str:
     lines = [
+        f"golden set: {report.golden_set_path} (v{report.golden_set_version}) — "
+        f"{report.n_answerable} answerable, {report.n_unanswerable} unanswerable",
         f"rrf_k={report.rrf_k} candidate_k={report.candidate_k}",
+        "",
+        f"recall@k and MRR over the {report.n_answerable} ANSWERABLE entries only:",
         f"{'arm':<10} {'n':>3}  " + "  ".join(f"recall@{k:<3}" for k in RECALL_KS) + "     mrr",
     ]
     arms = (("lexical", report.lexical), ("vector", report.vector), ("hybrid", report.hybrid))
@@ -220,16 +345,28 @@ def format_report(report: EvaluationReport) -> str:
         recalls = "  ".join(f"{metrics.recall_at[k]:>9.3f}" for k in RECALL_KS)
         lines.append(f"{name:<10} {metrics.n_questions:>3}  {recalls}  {metrics.mrr:>6.3f}")
     lines.append("")
-    lines.append("abstention (unanswerable questions, top-1 hybrid rrf_score, lower = better):")
+    lines.append(
+        f"abstention over the {report.n_unanswerable} UNANSWERABLE entries "
+        "(top-1 hybrid rrf_score, lower = better) — scored separately, never folded "
+        "into recall or MRR:"
+    )
     for qid, score in report.abstention_scores.items():
         lines.append(f"  {qid}: {score:.5f}")
     return "\n".join(lines)
 
 
 def _demo() -> None:
-    """Offline: exercises the recall/MRR math and the cache round-trip against
-    a FakeEmbedder and a scratch cache file — no real corpus, no network, no
-    dependence on the live Postgres/Chroma state.
+    """Two parts.
+
+    Offline: recall/MRR math and the cache round-trip against a FakeEmbedder and
+    a scratch cache file — no corpus, no network.
+
+    Live (Postgres only, no Chroma, no embedding call, $0): gold-chunk
+    resolution. The decisive check is that resolving v2's spans reproduces the
+    `chunk_ids` v2 recorded independently at authoring time — ground truth this
+    code did not produce. Then five deliberately broken spans confirm the
+    resolver raises rather than quietly resolving to nothing, because a scoring
+    path that silently reads wrong is worse than one that crashes.
     """
     import asyncio
     import tempfile
@@ -286,7 +423,73 @@ def _demo() -> None:
             assert len(json.loads(cache_path.read_text())) == 3
 
     asyncio.run(run_cache_check())
-    print("ok: recall@k/MRR math, cache-miss refusal, and cache round-trip verified offline")
+
+    async def run_resolver_check() -> None:
+        from app.core.config import get_settings
+        from app.db.session import create_engine, create_session_factory
+
+        engine = create_engine(get_settings())
+        factory = create_session_factory(engine)
+        try:
+            async with factory() as session:
+                # --- v2 cross-check: resolution must reproduce recorded ids ---
+                v2_path = Path("tests/fixtures/golden_set.json")
+                v2_raw = json.loads(v2_path.read_text())
+                recorded = {
+                    q["id"]: {cid for ev in q["evidence"] for cid in ev["chunk_ids"]}
+                    for q in v2_raw["questions"]
+                }
+                v2 = load_golden_set(v2_path)
+                resolved = await resolve_gold_chunk_ids(session, v2)
+                for entry in v2:
+                    assert resolved[entry.id] == recorded[entry.id], (
+                        f"{entry.id}: resolved {resolved[entry.id]} != recorded "
+                        f"{recorded[entry.id]}"
+                    )
+                multi = [e for e in v2 if len(e.spans) > 1]
+                assert multi, "expected v2 to contain multi-span questions (q11-q13)"
+                assert all(
+                    len(resolved[e.id]) == 2 for e in multi
+                ), "multi-span must map to 2 chunks"
+
+                # --- v3 resolves end to end, and the split is structural ---
+                v3 = load_golden_set(GOLDEN_SET_PATH)
+                assert sum(e.answerable for e in v3) == 30, "expected 30 answerable"
+                assert sum(not e.answerable for e in v3) == 6, "expected 6 near-miss"
+                r3 = await resolve_gold_chunk_ids(session, v3)
+                assert all(r3[e.id] for e in v3 if e.answerable), "every answerable must resolve"
+
+                # --- negative controls: each must raise, none may pass ---
+                good = next(e for e in v3 if e.answerable)
+                doc = good.document_id
+                broken = [
+                    ("crosses a chunk gap", GoldenEntry("bad1", "q", True, doc, ((0, 271256),))),
+                    (
+                        "past end of corpus",
+                        GoldenEntry("bad2", "q", True, doc, ((999000, 999100),)),
+                    ),
+                    ("answerable, no spans", GoldenEntry("bad3", "q", True, doc, ())),
+                    ("unknown document", GoldenEntry("bad4", "q", True, "doc_NOPE", ((0, 10),))),
+                    (
+                        "off-by-one past chunk end",
+                        GoldenEntry("bad5", "q", True, doc, ((good.spans[0][0], 271257),)),
+                    ),
+                ]
+                for label, entry in broken:
+                    try:
+                        await resolve_gold_chunk_ids(session, [entry])
+                    except GoldenSetError:
+                        pass
+                    else:
+                        raise AssertionError(f"resolver accepted a bad span: {label}")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run_resolver_check())
+    print(
+        "ok: recall@k/MRR math and cache round-trip offline; gold resolution reproduces "
+        "all 13 of v2's recorded chunk_id sets, v3 resolves 30+6, and 5 broken spans all raise"
+    )
 
 
 if __name__ == "__main__":
