@@ -1,0 +1,540 @@
+{
+  "version": 3,
+  "supersedes": 2,
+  "corpus": {
+    "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+    "filename": "Mastering RAG 2026_compressed.pdf",
+    "pages": 247,
+    "chunks": 260,
+    "anchoring": "canonical-text offsets resolved through the containing chunk; no chunk_ids stored"
+  },
+  "entries": [
+    {
+      "id": "a01",
+      "answerable": true,
+      "question": "Where did the person who wrote this book go to university?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 3783,
+      "char_end": 3811,
+      "snippet": "He is an IIT Bombay alumnus.",
+      "page": 5,
+      "expected_answer_substring": "IIT Bombay",
+      "authoring_note": "Asked as 'go to university'; the passage says 'alumnus'. No shared content word except the school name."
+    },
+    {
+      "id": "a02",
+      "answerable": true,
+      "question": "A single person spends five minutes asking follow-ups about one big uploaded file. If a thousand people did that daily, what does the book say the bill would be?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 9831,
+      "char_end": 9932,
+      "snippet": "That single user's 5-minute session just cost \n$1.50. If 1,000 users do this per day, that's \n$1,500.",
+      "page": 11,
+      "expected_answer_substring": "$1,500",
+      "authoring_note": "Framed as a billing question. Avoids 'token', 'context', 'query' — the passage's own vocabulary."
+    },
+    {
+      "id": "a03",
+      "answerable": true,
+      "question": "Between grounding answers in documents and training the model on your own data, which does the book say comes out ahead on staying current and showing its work?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 23099,
+      "char_end": 23198,
+      "snippet": "RAG wins on data freshness, external knowledge access, \nhallucination prevention, and transparency.",
+      "page": 22,
+      "expected_answer_substring": "RAG",
+      "authoring_note": "'staying current' for 'data freshness', 'showing its work' for 'transparency'."
+    },
+    {
+      "id": "a04",
+      "answerable": true,
+      "question": "What is it called when someone asks for a short overview and gets a long answer instead?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 32676,
+      "char_end": 32764,
+      "snippet": "Incorrect Specificity (FP6) occurs when the level of detail does not \nmatch the request.",
+      "page": 31,
+      "expected_answer_substring": "Incorrect Specificity",
+      "authoring_note": "Described the symptom in plain words; the label is the answer, not the question."
+    },
+    {
+      "id": "a05",
+      "answerable": true,
+      "question": "How does the book suggest catching personal details in a user's message before the system acts on it?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 36296,
+      "char_end": 36357,
+      "snippet": "PII Detection Prevent data leakage Regex + NER → placeholders",
+      "page": 33,
+      "expected_answer_substring": "Regex + NER",
+      "authoring_note": "'personal details' rather than 'PII'; the acronym is in the answer only."
+    },
+    {
+      "id": "a07",
+      "answerable": true,
+      "question": "Is there a way to drop weak results automatically instead of picking a fixed cutoff number?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 53701,
+      "char_end": 53876,
+      "snippet": "Autocut examines similarity scores and \nidentifies where the scores decline significantly. \nThe system uses that point as a threshold and \nexcludes results that fall below it.",
+      "page": 48,
+      "expected_answer_substring": "Autocut",
+      "authoring_note": "Asked as a capability question; the feature name is the answer."
+    },
+    {
+      "id": "a09",
+      "answerable": true,
+      "question": "How many things does the architecture chapter's wrap-up say can go wrong, and what are they?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 71745,
+      "char_end": 71974,
+      "snippet": "Enterprise RAG architecture addresses \nseven failure modes through deliberate \ndesign: Missing Content, Missed Top-\nRanked Documents, Not in Context, \nNot Extracted, Wrong Format, Incorrect \nSpecificity, and Incomplete responses.",
+      "page": 60,
+      "expected_answer_substring": "seven failure modes",
+      "authoring_note": "'things that can go wrong' for 'failure modes'."
+    },
+    {
+      "id": "a10",
+      "answerable": true,
+      "question": "Has anyone actually measured whether splitting along a document's own sections beats cutting it into equal pieces?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 80548,
+      "char_end": 80742,
+      "snippet": "studies analyzing SEC filings \nfound that element-based chunking (sections, tables, lists) outperformed fixed-size \nchunking by preserving the semantic relationships within structured documents.",
+      "page": 68,
+      "expected_answer_substring": "element-based chunking",
+      "authoring_note": "'equal pieces' for 'fixed-size'; 'own sections' for 'document structure'."
+    },
+    {
+      "id": "a11",
+      "answerable": true,
+      "question": "Why can't patient files be split at any convenient point?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 84554,
+      "char_end": 84696,
+      "snippet": "You cannot split chunks \nin ways that inadvertently expose \nprotected health information or separate \ndiagnoses from their qualifying context.",
+      "page": 71,
+      "expected_answer_substring": "protected health information",
+      "authoring_note": "'patient files' for 'medical records'; HIPAA never named in the question."
+    },
+    {
+      "id": "a13",
+      "answerable": true,
+      "question": "What do you gain by pasting a short summary in front of each piece before turning it into vectors?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 101256,
+      "char_end": 101320,
+      "snippet": "The embedding now captures both the fact and its source context.",
+      "page": 90,
+      "expected_answer_substring": "both the fact and its source context",
+      "authoring_note": "'pasting a short summary in front' for 'prepend this context'."
+    },
+    {
+      "id": "a14",
+      "answerable": true,
+      "question": "Who introduced the approach that embeds a whole document first and only applies the cuts at the end, and in what year?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 102568,
+      "char_end": 102597,
+      "snippet": "Introduced by Jina AI in 2024",
+      "page": 92,
+      "expected_answer_substring": "Jina AI in 2024",
+      "authoring_note": "Describes the mechanism in plain terms rather than naming 'late chunking'."
+    },
+    {
+      "id": "a15",
+      "answerable": true,
+      "question": "If I had a hundred thousand documents and let a model pick the break points, roughly what would that cost?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 106304,
+      "char_end": 106470,
+      "snippet": "if you have 100,000 \ndocuments and agentic chunking requires 10 \nLLM calls per document at $0.001 each, that's 1 \nmillion LLM calls totaling $1,000 just for chunking.",
+      "page": 95,
+      "expected_answer_substring": "$1,000",
+      "authoring_note": "'let a model pick the break points' for 'agentic chunking'."
+    },
+    {
+      "id": "a17",
+      "answerable": true,
+      "question": "There is a score for how much of a retrieved passage actually got used. What range does it sit in, and what does the top of the range mean?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 114273,
+      "char_end": 114368,
+      "snippet": "The metric ranges from \n0 to 1. A value of 1 indicates the \nentire chunk affected the response.",
+      "page": 101,
+      "expected_answer_substring": "0 to 1",
+      "authoring_note": "Describes the metric instead of naming 'chunk utilization'."
+    },
+    {
+      "id": "a18",
+      "answerable": true,
+      "question": "Do shorter vectors genuinely search faster, or does that even out?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 125382,
+      "char_end": 125491,
+      "snippet": "lower-dimensional embeddings \ntend to yield larger speedups, as fewer \nvector components need to be compared.",
+      "page": 109,
+      "expected_answer_substring": "larger speedups",
+      "authoring_note": "'shorter vectors' for 'lower-dimensional embeddings' is unavoidable; rest is plain phrasing."
+    },
+    {
+      "id": "a19",
+      "answerable": true,
+      "question": "What was the input ceiling on older embedding models before long-context ones arrived?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 129823,
+      "char_end": 129874,
+      "snippet": "Early embedding models limited inputs to 512 tokens",
+      "page": 113,
+      "expected_answer_substring": "512 tokens",
+      "authoring_note": "Direct factual lookup; overlap on 'embedding' and 'model' is irreducible."
+    },
+    {
+      "id": "a20",
+      "answerable": true,
+      "question": "With OpenAI's newer embedding models, can I ask for a smaller vector than the maximum, and which sizes are on offer?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 146590,
+      "char_end": 146717,
+      "snippet": "models generate up to 3,072-dimensional \nembeddings, but you can request 256, 512, 768, \nor 1,536 dimensions at embedding time.",
+      "page": 128,
+      "expected_answer_substring": "256, 512, 768, or 1,536",
+      "authoring_note": "'smaller vector' for 'reduce dimensions'; avoids 'Matryoshka' entirely."
+    },
+    {
+      "id": "a21",
+      "answerable": true,
+      "question": "Which shipping product does the book name as searching repositories with code-aware vectors?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 148437,
+      "char_end": 148519,
+      "snippet": "GitHub Copilot Chat uses code embeddings to \nsearch through codebases semantically",
+      "page": 130,
+      "expected_answer_substring": "GitHub Copilot Chat",
+      "authoring_note": "'repositories' for 'codebases' in the question."
+    },
+    {
+      "id": "a22",
+      "answerable": true,
+      "question": "How many test sets does the big public leaderboard for embedding models cover?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 149202,
+      "char_end": 149301,
+      "snippet": "models across 58 datasets covering retrieval, classification, clustering, \nand semantic similarity.",
+      "page": 131,
+      "expected_answer_substring": "58 datasets",
+      "authoring_note": "'big public leaderboard' for 'MTEB'; the acronym never appears in the question."
+    },
+    {
+      "id": "a23",
+      "answerable": true,
+      "question": "For text search, which way of measuring closeness is usually chosen, and what makes it the default?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 171357,
+      "char_end": 171543,
+      "snippet": "In practice, cosine similarity \nis the most common choice for text because embedding models are designed \nto place similar meanings in the same direction, even when their lengths differ.",
+      "page": 155,
+      "expected_answer_substring": "cosine similarity",
+      "authoring_note": "'way of measuring closeness' for 'distance metric'."
+    },
+    {
+      "id": "a24",
+      "answerable": true,
+      "question": "Why does the graph-based index get expensive once you have a lot of vectors?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 173990,
+      "char_end": 174153,
+      "snippet": "HNSW's speed comes from keeping the entire graph \nstructure in RAM. The graph connections multiply memory \nrequirements beyond just storing the vectors themselves.",
+      "page": 157,
+      "expected_answer_substring": "in RAM",
+      "authoring_note": "'graph-based index' avoids naming HNSW; 'gets expensive' for 'memory constraint'."
+    },
+    {
+      "id": "a25",
+      "answerable": true,
+      "question": "If I round my vectors down to whole numbers instead of decimals, how much quality do I give up?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 178395,
+      "char_end": 178517,
+      "snippet": "significantly lowers memory usage while preserving the structure \nof the vector space more faithfully than binary methods.",
+      "page": 160,
+      "expected_answer_substring": "Minimal degradation",
+      "authoring_note": "'round down to whole numbers' for 'scalar quantization to int8'."
+    },
+    {
+      "id": "a27",
+      "answerable": true,
+      "question": "How much delay does a second-pass relevance step add for fifty results, and how much worse is it when a big general-purpose model does that job?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 205369,
+      "char_end": 205593,
+      "snippet": "Cross-encoder models require \n200-400ms to score 50 candidates, depending on model size and \nhardware. LLM-based rerankers take significantly longer, with GPT-4 \nand Llama-70B requiring up to 1 minute to rerank 50 documents.",
+      "page": 181,
+      "expected_answer_substring": "200-400ms",
+      "authoring_note": "Rewritten: the first draft shared 'score', 'candidates', 'take' and 'model' (0.31). 'delay', 'results' and 'worse' replace them; 'fifty' does not stem onto '50'."
+    },
+    {
+      "id": "a28",
+      "answerable": true,
+      "question": "Where do the genuinely useful results tend to end up when ranking is left to similarity alone?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 202263,
+      "char_end": 202355,
+      "snippet": "relevant chunks are often hidden at \npositions 8, 15, or 23, mixed with less useful results.",
+      "page": 179,
+      "expected_answer_substring": "positions 8, 15, or 23",
+      "authoring_note": "'end up' for 'are hidden at'; question avoids 'rerank' entirely."
+    },
+    {
+      "id": "a29",
+      "answerable": true,
+      "question": "How many candidates is the common second-pass architecture meant to handle in production?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 209127,
+      "char_end": 209204,
+      "snippet": "where you can absorb 200-400ms latency and need to rerank 20-\n100 candidates.",
+      "page": 185,
+      "expected_answer_substring": "20-100 candidates",
+      "authoring_note": "Sizing question; 'second-pass architecture' avoids 'cross-encoder'."
+    },
+    {
+      "id": "a30",
+      "answerable": true,
+      "question": "What two ways can a system end up showing someone information they should never have seen?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 246444,
+      "char_end": 246849,
+      "snippet": "PII (Personally Identifiable \nInformation) retrieval: The RAG system \nmay retrieve documents containing PII \n(such as names, addresses, or medical \nrecords) that were not redacted \ncorrectly in the source material.\n2. Context Leakage: The model might \ninadvertently leak information from \nanother user's session or from internal, \nnon-customer-facing documents that \nwere included in the retrieval corpus.",
+      "page": 223,
+      "expected_answer_substring": "Context Leakage",
+      "authoring_note": "Plain-language framing of 'privacy breach'; neither 'privacy' nor 'breach' in the question."
+    },
+    {
+      "id": "a31",
+      "answerable": true,
+      "question": "When a ranking is perfect, what score does the headline reranking measure reach?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 224948,
+      "char_end": 225028,
+      "snippet": "A perfect ranking (all \nrelevant documents at the top) yields an NDCG@10 of 1.0.",
+      "page": 199,
+      "expected_answer_substring": "1.0",
+      "authoring_note": "'headline measure' avoids naming NDCG@10, which is the answer; 'perfect ranking' is the passage's own phrase but unavoidable in the question."
+    },
+    {
+      "id": "a32",
+      "answerable": true,
+      "question": "What is the name for a system correctly saying it has nothing useful rather than guessing?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 242270,
+      "char_end": 242447,
+      "snippet": "Negative rejection \nassesses whether the model will decline to answer a question when none of the \ncontexts provide useful information, rather than giving an incorrect response.",
+      "page": 217,
+      "expected_answer_substring": "Negative rejection",
+      "authoring_note": "'saying it has nothing useful rather than guessing' for 'decline to answer when no context provides useful information'."
+    },
+    {
+      "id": "a33",
+      "answerable": true,
+      "question": "Which diversity technique picks results that are useful but unlike what has already been chosen?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 269835,
+      "char_end": 269957,
+      "snippet": "MMR Maximal Marginal Relevance; diversity mechanism balancing relevance with \ndissimilarity to already-selected documents.",
+      "page": 247,
+      "expected_answer_substring": "MMR",
+      "authoring_note": "Retargeted from p219 to the glossary at p247 to fill decile 10, which the first draft left empty. 'useful' avoids the passage's 'relevance'."
+    },
+    {
+      "id": "a34",
+      "answerable": true,
+      "question": "What is the trick of putting instructions at the very start of a message to steer the model called?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 250564,
+      "char_end": 250698,
+      "snippet": "Prefix injection involves inserting specific instructions or phrases at \nthe beginning of a prompt to manipulate the model's behavior.",
+      "page": 229,
+      "expected_answer_substring": "Prefix injection",
+      "authoring_note": "Describes the mechanism; the label is the answer."
+    },
+    {
+      "id": "a35",
+      "answerable": true,
+      "question": "How many sample questions should real subject-matter people review before a benchmark goes live?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "char_start": 259760,
+      "char_end": 259803,
+      "snippet": "Run 30 test queries through domain experts.",
+      "page": 239,
+      "expected_answer_substring": "30 test queries",
+      "authoring_note": "Rewritten: the first draft shared 'test', 'queries', 'domain' and 'experts' with the sentence (0.36). 'sample questions' and 'subject-matter people' carry the same intent with no borrowed vocabulary."
+    },
+    {
+      "id": "u01",
+      "answerable": false,
+      "question": "What does Voyage Rerank 2.5 cost per thousand queries?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "near_miss_to": {
+        "char_start": 222032,
+        "char_end": 222149,
+        "snippet": "Voyage Rerank 2.5 supports a 32,000 token context length, double that of \nRerank 2 and 8x that of Cohere Rerank v3.5.",
+        "page": 197
+      },
+      "why_unanswerable": "The corpus specifies Rerank 2.5's context length, deployment model and benchmark margins over competitors, but never states a price for it.",
+      "absence_evidence": [
+        {
+          "sql": "text ILIKE '%rerank%' AND (text ILIKE '%price%' OR text ILIKE '%pricing%' OR text ILIKE '%$%')",
+          "rows": 1,
+          "inspected": "One match, ord 45, a hybrid-search passage in chapter 2 that contains the word 'pricing'. It states no reranker price."
+        },
+        {
+          "sql": "text ILIKE '%voyage%' AND text ILIKE '%cost%'",
+          "rows": 2,
+          "inspected": "Two matches. ord 125 is an embedding-provider table listing 'Per-token pricing' for OpenAI and Cohere with no figures, and concerns embedding APIs rather than rerankers. ord 213 is a reranker selection guide whose only cost language is the qualitative 'Lower cost, self-hosted'."
+        },
+        {
+          "sql": "content_tsv @@ websearch_to_tsquery('english','rerank pricing per query dollars')",
+          "rows": 0
+        }
+      ],
+      "overlap_note": "Overlap 3/7 = 0.43, above the 0.30 line and left as-is deliberately. All three shared lexemes are the product name ('voyag', 'rerank', '2.5'); a question about one named model's price cannot avoid naming it. Padding the question to dilute the ratio would game the metric without reducing leakage."
+    },
+    {
+      "id": "u02",
+      "answerable": false,
+      "question": "What year did Galileo, the author's employer, raise its Series A?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "near_miss_to": {
+        "char_start": 3132,
+        "char_end": 3230,
+        "snippet": "Pratik Bhavsar is an AI Engineer at Galileo, specializing in AI \nevaluation and agent engineering.",
+        "page": 5
+      },
+      "why_unanswerable": "The corpus establishes Galileo as the author's employer and references its products throughout, but says nothing about the company's funding history.",
+      "absence_evidence": [
+        {
+          "sql": "text ILIKE '%series a%'",
+          "rows": 0
+        },
+        {
+          "sql": "text ILIKE '%funding%'",
+          "rows": 0
+        },
+        {
+          "sql": "content_tsv @@ websearch_to_tsquery('english','series funding round raised')",
+          "rows": 0
+        }
+      ]
+    },
+    {
+      "id": "u03",
+      "answerable": false,
+      "question": "Under what licence are Galileo's Luna evaluation models released, and are the weights downloadable?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "near_miss_to": {
+        "char_start": 111027,
+        "char_end": 111122,
+        "snippet": "Luna consists of purpose-built 440-million \nparameter models fine-tuned on real-world RAG data.",
+        "page": 99
+      },
+      "why_unanswerable": "The corpus gives Luna's parameter count, training data and purpose, and elsewhere discusses licensing explicitly for other models (mxbai-rerank-large-v2 is described as being under an open license, and vector-database licensing has its own evaluation category) - but it never states a licence for Luna or says whether its weights are obtainable.",
+      "absence_evidence": [
+        {
+          "sql": "text ILIKE '%luna%' AND text ILIKE '%licens%'",
+          "rows": 0
+        },
+        {
+          "sql": "text ILIKE '%luna%' AND (text ILIKE '%weights%' OR text ILIKE '%download%' OR text ILIKE '%open source%')",
+          "rows": 0
+        },
+        {
+          "sql": "content_tsv @@ websearch_to_tsquery('english','Luna license weights download')",
+          "rows": 0
+        }
+      ]
+    },
+    {
+      "id": "u04",
+      "answerable": false,
+      "question": "How often is the MTEB leaderboard refreshed?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "near_miss_to": {
+        "char_start": 149202,
+        "char_end": 149301,
+        "snippet": "models across 58 datasets covering retrieval, classification, clustering, \nand semantic similarity.",
+        "page": 131
+      },
+      "why_unanswerable": "The corpus states MTEB's dataset count and names its current leaders, but never mentions update cadence or how often rankings change.",
+      "absence_evidence": [
+        {
+          "sql": "text ILIKE '%leaderboard%' AND text ILIKE '%updat%'",
+          "rows": 0
+        },
+        {
+          "sql": "text ILIKE '%refreshed%'",
+          "rows": 0
+        },
+        {
+          "sql": "content_tsv @@ websearch_to_tsquery('english','leaderboard updated monthly frequency')",
+          "rows": 0
+        }
+      ]
+    },
+    {
+      "id": "u05",
+      "answerable": false,
+      "question": "Which research group is behind BEIR?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "near_miss_to": {
+        "char_start": 224441,
+        "char_end": 224704,
+        "snippet": "The BEIR (Benchmarking IR) benchmark evaluates rerankers across \ndiverse retrieval tasks. BEIR includes 18 datasets spanning different \ndomains: question answering (Natural Questions, HotpotQA), fact \nverification (FEVER), citation prediction (SCIDOCS), and more.",
+        "page": 199
+      },
+      "why_unanswerable": "The corpus describes BEIR's dataset count, its domains and its primary metric, and cites BEIR scores in two separate chapters - but never names the group that built or maintains it.",
+      "absence_evidence": [
+        {
+          "sql": "text ILIKE '%beir%' AND (text ILIKE '%maintained by%' OR text ILIKE '%created by%' OR text ILIKE '%developed by%')",
+          "rows": 0
+        },
+        {
+          "sql": "text ILIKE '%beir%' AND (text ILIKE '%university%' OR text ILIKE '%research group%' OR text ILIKE '%authors%')",
+          "rows": 0
+        },
+        {
+          "sql": "content_tsv @@ websearch_to_tsquery('english','BEIR created maintained university research group')",
+          "rows": 0
+        }
+      ]
+    },
+    {
+      "id": "u06",
+      "answerable": false,
+      "question": "What is the per-document price of the technique that prepends a generated summary before embedding?",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "near_miss_to": {
+        "char_start": 106304,
+        "char_end": 106470,
+        "snippet": "if you have 100,000 \ndocuments and agentic chunking requires 10 \nLLM calls per document at $0.001 each, that's 1 \nmillion LLM calls totaling $1,000 just for chunking.",
+        "page": 95
+      },
+      "why_unanswerable": "The corpus gives a per-call price of $0.001 for agentic chunking and works the arithmetic through to $1,000 for 100,000 documents. Context-enriched chunking is described four separate times as requiring an LLM call per chunk and 'increasing preprocessing cost', but no figure is ever attached to it - every mention is qualitative.",
+      "absence_evidence": [
+        {
+          "sql": "text ILIKE '%context%enrich%' AND text ILIKE '%$%'",
+          "rows": 2,
+          "inspected": "Two matches, ord 101 and ord 105. Both price *agentic* chunking - $0.001 per LLM call and 'Most expensive; $1,000+ per 100K documents'. Neither attaches any figure to context-enriched chunking."
+        },
+        {
+          "sql": "text ILIKE '%context%enrich%' AND (text ILIKE '%cost per%' OR text ILIKE '%per call%' OR text ILIKE '%per document%')",
+          "rows": 1,
+          "inspected": "One match, ord 101, the same agentic-chunking arithmetic; the phrase 'per document' belongs to that sentence."
+        },
+        {
+          "sql": "content_tsv @@ websearch_to_tsquery('english','context enriched chunking price dollars per call')",
+          "rows": 0
+        }
+      ]
+    }
+  ]
+}
