@@ -1,89 +1,241 @@
 {
-  "corpus": "Mastering RAG 2026_compressed.pdf",
-  "corpus_pages": 247,
-  "notes": "Every fact and phrase below was pulled from the real corpus text (verified against app.services.parsing output, not from memory). Two entries are deliberately unanswerable: Step 03's Verifier needs them to prove it refuses rather than fabricates, and Step 06's regression test needs them as anchors for the false-answer rate.",
+  "version": 2,
+  "corpus": {
+    "filename": "Mastering RAG 2026_compressed.pdf",
+    "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+    "pages": 247,
+    "chunks": 260
+  },
+  "notes": "Every quote and offset below was read directly off the live Postgres `chunks` table for doc_01M0D39WZDYY7STA3PHWT5R4C7 (chunker output, not retyped from memory): char_start/char_end come from `char_start + position(<quote> in text) - 1`, verified to fall inside the owning chunk's own [char_start, char_end) range. v1 (10 questions, no spans) was upgraded in place rather than replaced — q01-q10 are unchanged in content, only provenance was added. Three questions were added for Chunk 5's retrieval-fusion benchmark: q11 (boundary) and q12/q13 (multi_chunk). The two unanswerable questions (q09, q10) were re-verified absent via both `ILIKE` and `content_tsv @@ websearch_to_tsquery` returning zero rows.",
   "questions": [
     {
       "id": "q01",
       "type": "factual",
       "question": "According to the book, what context window size did Google's Gemini 1.5 Pro launch with in February 2024?",
+      "why_included": "Single-chunk factual baseline — the easy case every retriever should get right.",
       "expected_answer_substring": "1 million token context window",
-      "relevant_pages": [8],
-      "must_cite_text": "1 million token context window"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 8,
+          "char_start": 5479,
+          "char_end": 5509,
+          "quote": "1 million token context window",
+          "chunk_ids": ["chk_01M0D4BMG75ZWKA3KZWEK3T1AP"]
+        }
+      ]
     },
     {
       "id": "q02",
       "type": "factual",
       "question": "Under one-hot encoding with a 50,000-word vocabulary, how many zeros does each word's vector contain?",
+      "why_included": "Single-chunk factual baseline with a numeric answer, easy to check for exactness.",
       "expected_answer_substring": "49,999 zeros",
-      "relevant_pages": [108],
-      "must_cite_text": "49,999 zeros"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 108,
+          "char_start": 122466,
+          "char_end": 122478,
+          "quote": "49,999 zeros",
+          "chunk_ids": ["chk_01M0D4BMGRDEKCE09VZDGN3PWV"]
+        }
+      ]
     },
     {
       "id": "q03",
       "type": "factual",
       "question": "Which chapter number in this book covers 'How to Select a Reranker'?",
+      "why_included": "Single-chunk factual baseline drawn from the table of contents, not body prose.",
       "expected_answer_substring": "Chapter 06",
-      "relevant_pages": [2],
-      "must_cite_text": "Chapter 06: How to Select a Reranker"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 2,
+          "char_start": 407,
+          "char_end": 443,
+          "quote": "Chapter 06: How to Select a Reranker",
+          "chunk_ids": ["chk_01M0D4BMG6AASVJBVVD32X3B4S"]
+        }
+      ]
     },
     {
       "id": "q04",
       "type": "factual",
       "question": "Per the reranker chapter, what three problems does feeding all 20 top-ranked chunks to the LLM cause, when only 3 of them are actually relevant?",
+      "why_included": "Single-chunk factual baseline, longer answer span than q01-q03.",
       "expected_answer_substring": "wastes tokens, increases latency, and introduces noise",
-      "relevant_pages": [177],
-      "must_cite_text": "wastes tokens, increases"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 177,
+          "char_start": 201094,
+          "char_end": 201118,
+          "quote": "wastes tokens, increases",
+          "chunk_ids": ["chk_01M0D4BMGYQ85SHDJZ47JFHW8G"]
+        }
+      ]
     },
     {
       "id": "q05",
       "type": "factual",
       "question": "How many RAG failure modes does Chapter 7 examine before a system goes to production?",
+      "why_included": "Single-chunk factual baseline with a numeric answer.",
       "expected_answer_substring": "8",
-      "relevant_pages": [209],
-      "must_cite_text": "8 most useful"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 209,
+          "char_start": 237233,
+          "char_end": 237246,
+          "quote": "8 most useful",
+          "chunk_ids": ["chk_01M0D4BMH0GZNBHDWC01SVC6AA"]
+        }
+      ]
     },
     {
       "id": "q06",
       "type": "factual",
       "question": "According to the glossary, what does Binary Quantization do to each vector dimension?",
+      "why_included": "Single-chunk factual baseline drawn from the glossary section, not chapter prose.",
       "expected_answer_substring": "converts each vector dimension into a single bit based on its sign",
-      "relevant_pages": [245],
-      "must_cite_text": "converting each vector dimension into a single bit based"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 245,
+          "char_start": 266534,
+          "char_end": 266590,
+          "quote": "converting each vector dimension into a single bit based",
+          "chunk_ids": ["chk_01M0D4BMH2Q6GVZQXXF3GDAENV"]
+        }
+      ]
     },
     {
       "id": "q07",
       "type": "factual",
       "question": "What company does the book's author, Pratik Bhavsar, work at as an AI Engineer?",
+      "why_included": "Single-chunk factual baseline from the author bio, an entity-lookup style question.",
       "expected_answer_substring": "Galileo",
-      "relevant_pages": [5],
-      "must_cite_text": "Pratik Bhavsar is an AI Engineer at Galileo"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 5,
+          "char_start": 3132,
+          "char_end": 3175,
+          "quote": "Pratik Bhavsar is an AI Engineer at Galileo",
+          "chunk_ids": ["chk_01M0D4BMG7370W9C8ZQKPHP27G"]
+        }
+      ]
     },
     {
       "id": "q08",
       "type": "factual",
       "question": "According to the glossary, what does a Cross-Encoder reranker architecture do?",
+      "why_included": "Single-chunk factual baseline drawn from the glossary section, not chapter prose.",
       "expected_answer_substring": "processes query and document together to produce relevance scores",
-      "relevant_pages": [246],
-      "must_cite_text": "processes query and document together to produce"
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 246,
+          "char_start": 268207,
+          "char_end": 268255,
+          "quote": "processes query and document together to produce",
+          "chunk_ids": ["chk_01M0D4BMH24887NAQ39Z7NFW8B"]
+        }
+      ]
     },
     {
       "id": "q09",
       "type": "unanswerable",
       "question": "What is this book's ISBN?",
+      "why_included": "Abstention test: the entity class (a book) plausibly has this attribute, but the corpus never states it — a system must refuse rather than fabricate an ISBN.",
       "expected_answer_substring": null,
-      "relevant_pages": [],
-      "must_cite_text": null,
-      "unanswerable_reason": "The corpus contains no ISBN anywhere — verified by full-text search over every page. A grounded system must refuse; any answer is fabricated."
+      "evidence": [],
+      "unanswerable_reason": "Zero rows match `text ILIKE '%isbn%'` or `content_tsv @@ websearch_to_tsquery('english','isbn')` anywhere in the 260 chunks — re-verified live against Postgres this session."
     },
     {
       "id": "q10",
       "type": "unanswerable",
       "question": "What year did Galileo, the author's employer, raise its Series A funding round?",
+      "why_included": "Harder abstention test than q09: the entity (Galileo) is real and well-attested throughout the corpus (see q07), so a system that pattern-matches on entity presence rather than checking the specific claim is likely to fabricate a plausible-sounding year here.",
       "expected_answer_substring": null,
-      "relevant_pages": [],
-      "must_cite_text": null,
-      "unanswerable_reason": "Galileo is named throughout the book (author's bio, product features) but no funding history appears anywhere — verified by full-text search. This is the harder case: the entity is real and well-attested in the corpus, only the specific attribute asked for is absent, so a system that pattern-matches on entity presence rather than checking the actual claim is likely to fabricate here."
+      "evidence": [],
+      "unanswerable_reason": "Zero rows match `text ILIKE '%series a%'`, `text ILIKE '%funding%'`, or `content_tsv @@ websearch_to_tsquery('english','series funding round')` anywhere in the 260 chunks — re-verified live against Postgres this session."
+    },
+    {
+      "id": "q11",
+      "type": "boundary",
+      "question": "In the enterprise-RAG-architecture chapter summary, what does the final bullet point say enterprise data minimization is for?",
+      "why_included": "The sharpest chunk-boundary case in the corpus: the chunker splits chunk 64/65 with zero character overlap exactly between '...data minimization for' and 'privacy.' — the topical context lives entirely in chunk 64 (1999 chars) while the literal answer token lives alone in chunk 65 (69 chars, the smallest chunk in the document). A retriever that only surfaces chunk 64, or that under-ranks a 69-char chunk against denser competitors, fails this question even though both halves are 'nearby'.",
+      "expected_answer_substring": "privacy",
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 60,
+          "char_start": 73650,
+          "char_end": 73672,
+          "quote": "data minimization for ",
+          "chunk_ids": ["chk_01M0D4BMGKN417VAVZW3EKV2JW"]
+        },
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 60,
+          "char_start": 73672,
+          "char_end": 73680,
+          "quote": "privacy.",
+          "chunk_ids": ["chk_01M0D4BMGKRD2Z00BESPJJHF4S"]
+        }
+      ]
+    },
+    {
+      "id": "q12",
+      "type": "multi_chunk",
+      "question": "Per the embedding-model chapter, how many bytes does a single 1,536-dimensional float32 embedding require, and what do lower-dimensional embeddings do to ANN retrieval speed?",
+      "why_included": "Requires combining evidence from two adjacent-but-distinct chunks on page 109 (ordinals 117 and 118): the byte-math answer sits in chunk 117, the ANN-speed answer sits in chunk 118. Both chosen spans fall outside the chunker's own overlap region between the two chunks, so a correct multi-chunk answer genuinely requires retrieving both, not just the one chunk the overlap happens to duplicate into.",
+      "expected_answer_substring": "6,144 bytes",
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 109,
+          "char_start": 124024,
+          "char_end": 124047,
+          "quote": "1,536 × 4 = 6,144 bytes",
+          "chunk_ids": ["chk_01M0D4BMGRQ67Z2S5JPE17Z0JV"]
+        },
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 109,
+          "char_start": 125412,
+          "char_end": 125441,
+          "quote": "tend to yield larger speedups",
+          "chunk_ids": ["chk_01M0D4BMGRCKQV511HCGQYVE50"]
+        }
+      ]
+    },
+    {
+      "id": "q13",
+      "type": "multi_chunk",
+      "question": "Per the advanced-chunking chapter, what does the Hypothetical Questions technique embed instead of the original text, and per Table 3.10, what is the primary constraint of Agentic Chunking?",
+      "why_included": "Requires combining evidence from two adjacent-but-distinct chunks on page 98 (ordinals 104 and 105): the technique description sits in chunk 104, the table's cost figure sits in chunk 105. Both chosen spans fall outside the chunker's own overlap region between the two chunks, mirroring q12 with a different pair.",
+      "expected_answer_substring": "$1,000+ per 100K documents",
+      "evidence": [
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 98,
+          "char_start": 108794,
+          "char_end": 108891,
+          "quote": "The system generates questions that each \ndocument would appropriately answer, then \nembeds them.",
+          "chunk_ids": ["chk_01M0D4BMGQ60HSE120MZH4E59F"]
+        },
+        {
+          "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+          "page": 98,
+          "char_start": 110700,
+          "char_end": 110742,
+          "quote": "Most expensive; $1,000+ per 100K documents",
+          "chunk_ids": ["chk_01M0D4BMGQ97MJZN76TD0F7ZBG"]
+        }
+      ]
     }
   ]
 }

@@ -16,3 +16,8 @@ __pycache__/
 
 # Local runtime data (Chroma persistence, uploads)
 data/
+
+# Derived data — cached query embeddings for the golden-set evaluation harness.
+# Regenerated from tests/fixtures/golden_set.json on a cache miss; committing
+# it would bloat the repo and rot silently on a model change.
+tests/fixtures/query_embeddings.json
