@@ -1,10 +1,13 @@
 """Golden-set evaluation: recall@k and MRR for lexical-only, vector-only, and
 hybrid retrieval — Step 02 DoD #5 ("hybrid measurably beats vector-only").
 
-Query vectors are embedded exactly once per (question, model, dimensions) and
-cached to `tests/fixtures/query_embeddings.json`. Every subsequent run —
-including k-tuning and this module's own `_demo()` — reads the cache and makes
-zero network calls. See `evaluate()`'s docstring for the one-time cost.
+Query vectors are embedded once per (question, model, dimensions) and cached
+to `tests/fixtures/query_embeddings.json`. Network access is opt-in: a cache
+miss raises unless the caller passes `allow_network=True` (see
+`load_query_vectors`), so a plain `evaluate()` call can never surprise-spend.
+Every run against a warm cache — including k-tuning and this module's own
+`_demo()` — makes zero network calls. See `evaluate()`'s docstring for the
+one-time cost.
 """
 
 from __future__ import annotations
@@ -44,29 +47,48 @@ def _cache_key(question: str, model: str, dimensions: int) -> str:
 
 
 async def load_query_vectors(
-    questions: list[str],
+    questions: dict[str, str],
     embedder: Embedder,
     cache_path: Path = QUERY_EMBEDDINGS_CACHE_PATH,
+    allow_network: bool = False,
 ) -> dict[str, list[float]]:
-    """One vector per question, keyed by content+model+dimensions so a model
-    change can't silently serve a stale vector. Only the questions missing
-    from the cache are ever embedded — a fresh cache costs one network call
-    for the whole golden set, every rerun after that costs zero.
+    """One vector per question, keyed by the same id `questions` uses (e.g.
+    the golden set's `q01`). Cache entries are keyed by content+model+
+    dimensions so a model change can't silently serve a stale vector.
+
+    `allow_network` gates the only place this module can spend money.
+    Defaults to False: a cache miss raises rather than silently calling the
+    embedding API. Pass `allow_network=True` with a real Embedder to embed
+    and cache the missing questions — after that, every run is a cache hit
+    and this flag has no effect.
     """
     cache: dict[str, list[float]] = {}
     if cache_path.exists():
         cache = json.loads(cache_path.read_text())
 
-    keys = {q: _cache_key(q, embedder.model, embedder.dimensions) for q in questions}
-    missing = [q for q in questions if keys[q] not in cache]
+    keys = {
+        qid: _cache_key(text, embedder.model, embedder.dimensions)
+        for qid, text in questions.items()
+    }
+    missing = [qid for qid in questions if keys[qid] not in cache]
+
+    if missing and not allow_network:
+        raise RuntimeError(
+            f"query-embedding cache miss for {len(missing)} question(s) not covered by "
+            f"{cache_path}: {', '.join(sorted(missing))}. Refusing to call the embedding "
+            "API by default. Pass allow_network=True (with a real Embedder) to embed and "
+            "cache them — this is the only place in this module that can spend money."
+        )
+
     if missing:
-        vectors = await embedder.embed(missing, input_type="query")
-        for q, vector in zip(missing, vectors, strict=True):
-            cache[keys[q]] = vector
+        texts = [questions[qid] for qid in missing]
+        vectors = await embedder.embed(texts, input_type="query")
+        for qid, vector in zip(missing, vectors, strict=True):
+            cache[keys[qid]] = vector
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(cache))
 
-    return {q: cache[keys[q]] for q in questions}
+    return {qid: cache[keys[qid]] for qid in questions}
 
 
 def _rank_metrics(
@@ -108,22 +130,28 @@ async def evaluate(
     golden_set_path: Path = GOLDEN_SET_PATH,
     cache_path: Path = QUERY_EMBEDDINGS_CACHE_PATH,
     candidate_k: int = DEFAULT_CANDIDATE_K,
+    allow_network: bool = False,
 ) -> EvaluationReport:
     """Run all three retrieval arms over the golden set.
 
-    Cost (measured, one-time, only when the cache is cold): 13 questions,
-    1,337 chars, ~330 tokens (char/4 estimate) in **one** Voyage request —
-    well under both the 3 RPM and 10K TPM caps on the throttled account, so no
-    inter-request spacing is needed. At $0.02/1M tokens that's ~$0.0000066,
-    and inside the 200M-token free tier regardless. Every subsequent call to
-    this function reads the cache and makes zero network calls.
+    Cost (measured, one-time, only when the cache is cold and `allow_network`
+    is passed): 13 questions, 1,337 chars, ~330 tokens (char/4 estimate) in
+    **one** Voyage request — well under both the 3 RPM and 10K TPM caps on
+    the throttled account, so no inter-request spacing is needed. At
+    $0.02/1M tokens that's ~$0.0000066, and inside the 200M-token free tier
+    regardless. Every subsequent call to this function reads the cache and
+    makes zero network calls — see `load_query_vectors`'s docstring for the
+    `allow_network` gate.
     """
     golden_set: dict[str, Any] = json.loads(golden_set_path.read_text())
     questions: list[dict[str, Any]] = golden_set["questions"]
     answerable = [q for q in questions if q["type"] != "unanswerable"]
     unanswerable = [q for q in questions if q["type"] == "unanswerable"]
 
-    vectors = await load_query_vectors([q["question"] for q in questions], embedder, cache_path)
+    questions_by_id = {q["id"]: q["question"] for q in questions}
+    vectors = await load_query_vectors(
+        questions_by_id, embedder, cache_path, allow_network=allow_network
+    )
 
     lexical_scores: list[tuple[dict[int, float], float]] = []
     vector_scores: list[tuple[dict[int, float], float]] = []
@@ -132,7 +160,7 @@ async def evaluate(
     for q in answerable:
         query = q["question"]
         gold = {cid for ev in q["evidence"] for cid in ev["chunk_ids"]}
-        query_vector = vectors[query]
+        query_vector = vectors[q["id"]]
 
         lexical_hits = await lexical_search(session, query, candidate_k, None)
         vector_hits = await vector_search(
@@ -162,7 +190,7 @@ async def evaluate(
             embedder,
             top_k=1,
             candidate_k=candidate_k,
-            query_vector=vectors[query],
+            query_vector=vectors[q["id"]],
         )
         abstention_scores[q["id"]] = hits[0].rrf_score if hits else 0.0
 
@@ -217,26 +245,39 @@ def _demo() -> None:
         fake = FakeEmbedder(dimensions=8)
         with tempfile.TemporaryDirectory() as tmp:
             cache_path = Path(tmp) / "cache.json"
-            questions = ["what is RAG?", "what is a reranker?"]
+            questions = {"q_rag": "what is RAG?", "q_rerank": "what is a reranker?"}
 
-            vectors1 = await load_query_vectors(questions, fake, cache_path)
+            # A miss without allow_network must refuse and name the missing
+            # ids — never silently call the embedder, even a free one.
+            try:
+                await load_query_vectors(questions, fake, cache_path)
+            except RuntimeError as exc:
+                assert "q_rag" in str(exc) and "q_rerank" in str(exc), exc
+            else:
+                raise AssertionError("expected a cache-miss error without allow_network=True")
+            assert not cache_path.exists(), "a refused miss must not touch the cache file"
+
+            vectors1 = await load_query_vectors(questions, fake, cache_path, allow_network=True)
             assert cache_path.exists()
             written = json.loads(cache_path.read_text())
             assert len(written) == 2
 
-            # Second call must not add new entries or change existing ones —
-            # this is the "reruns are free" guarantee the eval harness relies on.
+            # Full cache hit: allow_network's default (False) must succeed and
+            # must not add new entries or change existing ones — this is the
+            # "reruns are free" guarantee the eval harness relies on.
             vectors2 = await load_query_vectors(questions, fake, cache_path)
             assert vectors1 == vectors2
             assert json.loads(cache_path.read_text()) == written
 
-            # A new question extends the cache without disturbing the old entries.
-            vectors3 = await load_query_vectors([*questions, "new question"], fake, cache_path)
-            assert vectors3["what is RAG?"] == vectors1["what is RAG?"]
+            # A new question is a genuine miss again -- needs allow_network=True
+            # -- but extends the cache without disturbing the old entries.
+            extended = {**questions, "q_new": "new question"}
+            vectors3 = await load_query_vectors(extended, fake, cache_path, allow_network=True)
+            assert vectors3["q_rag"] == vectors1["q_rag"]
             assert len(json.loads(cache_path.read_text())) == 3
 
     asyncio.run(run_cache_check())
-    print("ok: recall@k/MRR math and query-vector cache round-trip verified offline")
+    print("ok: recall@k/MRR math, cache-miss refusal, and cache round-trip verified offline")
 
 
 if __name__ == "__main__":
