@@ -15,6 +15,7 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
 from app.db.session import create_engine, create_session_factory, ping
+from app.documents.status import assert_status_enum_matches_db
 from app.services.vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
@@ -32,14 +33,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Probe both dependencies, but never abort startup over them: /health/ready
     # has to stay reachable to *report* a dependency being down.
+    postgres_reachable = False
     try:
         await ping(app.state.engine, STARTUP_PROBE_TIMEOUT_SECONDS)
+        postgres_reachable = True
         logger.info("postgres reachable", extra={"pool_size": settings.db_pool_size})
     except Exception as exc:
         logger.error(
             "postgres unreachable at startup — /health/ready will report 503",
             extra={"reason": str(exc)},
         )
+
+    # Fatal, unlike the probes around it. Those mean "a dependency is down, stay
+    # up so /health/ready can say so"; this means "the schema is not the schema
+    # this code was written against", and serving on would write wrong data.
+    # Gated on reachability so an unreachable database still yields a live app
+    # that can report 503, rather than a connection error dressed up as drift.
+    if postgres_reachable:
+        await assert_status_enum_matches_db(app.state.engine)
 
     try:
         await app.state.vector_store.check(STARTUP_PROBE_TIMEOUT_SECONDS)

@@ -29,6 +29,7 @@ from app.core.config import Settings, SettingsError, get_settings
 from app.core.logging import configure_cli_logging
 from app.db.models import Document, User
 from app.db.session import create_engine, create_session_factory, ping
+from app.documents.status import assert_status_enum_matches_db
 from app.services.embeddings import Embedder, VoyageEmbedder
 from app.services.evaluation import evaluate, format_report
 from app.services.ingestion import (
@@ -104,6 +105,11 @@ async def _preflight(engine: AsyncEngine, vector_store: VectorStore) -> None:
         )
     except Exception as exc:
         raise UnavailableError(str(exc)) from exc
+
+    # Deliberately not caught: a reachable database whose `document_status` type
+    # has drifted from DocumentStatus is not an availability problem, it is a
+    # correctness one, and every command here can write that column.
+    await assert_status_enum_matches_db(engine)
 
 
 async def _get_or_create_user(session: AsyncSession, email: str) -> User:
@@ -217,13 +223,12 @@ async def _cmd_reindex(
             "— ingest it as a new document instead"
         )
 
-    # Bypass ingest_document()'s ready -> no-op dedupe shortcut on purpose.
-    document.status = "queued"
-    document.error = None
-    await session.commit()
-
     embedder = _build_embedder(settings)
     print(f"reindexing {args.doc_id} from {candidate}...", file=sys.stderr)
+    # `force=True` is the whole of what this command needs: it bypasses
+    # ingest_document()'s ready -> no-op dedupe shortcut. The CLI does not write
+    # `status` itself — app/documents/status.py owns every transition, and a
+    # hand-set `queued` here would be an illegal move under its table anyway.
     reindexed = await ingest_document(
         candidate,
         candidate.name,
@@ -232,6 +237,7 @@ async def _cmd_reindex(
         vector_store,
         embedder,
         allow_network=args.allow_network,
+        force=True,
     )
     _print_document(reindexed)
     return EXIT_PIPELINE_FAILED if reindexed.status in TERMINAL_FAILURE_STATUSES else EXIT_OK

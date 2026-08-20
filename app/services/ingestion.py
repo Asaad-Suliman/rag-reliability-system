@@ -24,7 +24,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.ids import new_id
-from app.db.models import AuditEvent, Chunk, Document
+from app.db.models import AuditEvent, Chunk, Document, DocumentStatus
+from app.documents.status import transition
 from app.services.chunking import chunk_document
 from app.services.embeddings import Embedder, EmbeddingError
 from app.services.parsing import parse_file
@@ -83,12 +84,25 @@ async def ingest_document(
     vector_store: VectorStore,
     embedder: Embedder,
     allow_network: bool = False,
+    force: bool = False,
 ) -> Document:
     """Full state machine for one file.
 
     Idempotent: re-ingesting an already-`ready` document (same user, same
-    content hash) is a no-op that spends nothing. Re-ingesting a
-    `failed`/`quarantined`/interrupted one retries in place, from `queued`.
+    content hash) is a no-op that spends nothing, unless `force=True` — the
+    CLI's `reindex` — which drives it round again via the `ready -> parsing`
+    edge without ever passing back through `queued`.
+
+    A `quarantined` document is returned untouched: quarantine is a final
+    answer about a document's structure, not a step on the way to one, and
+    `app/documents/status.py` has no edge out of it. A `failed` one retries
+    from `queued`. One stranded in `parsing`/`indexing` by an interrupted run
+    is first swept to `failed`, which records the abandonment rather than
+    erasing it, and then retried the same way.
+
+    Every write to `documents.status` below goes through `transition()`, which
+    enforces legality in the `UPDATE`'s own `WHERE` clause and writes the
+    matching `audit_events` row.
 
     `allow_network` gates the one place this function can spend money. It
     defaults to `False`: if chunking produces anything that needs embedding,
@@ -109,14 +123,32 @@ async def ingest_document(
         )
     ).scalar_one_or_none()
 
-    if existing is not None and existing.status == "ready":
-        logger.info("ingest: dedupe hit, already ready", extra={"document_id": existing.id})
-        return existing
-
     if existing is not None:
+        if existing.status == DocumentStatus.READY and not force:
+            logger.info("ingest: dedupe hit, already ready", extra={"document_id": existing.id})
+            return existing
+        if existing.status == DocumentStatus.QUARANTINED:
+            logger.info("ingest: quarantined, terminal", extra={"document_id": existing.id})
+            return existing
+
         document = existing
-        document.status = "queued"
         document.error = None
+        if document.status in (DocumentStatus.PARSING, DocumentStatus.INDEXING):
+            # Stranded by an interrupted run. `parsing`/`indexing -> failed` and
+            # `failed -> queued` are the only legal way back, and going the long
+            # way leaves the abandonment in the audit trail.
+            await transition(
+                session,
+                document.id,
+                DocumentStatus.FAILED,
+                reason="abandoned by an interrupted run",
+            )
+        if document.status == DocumentStatus.FAILED:
+            await transition(session, document.id, DocumentStatus.QUEUED, reason="retry")
+        # A `ready` document with force=True stays `ready` here and takes the
+        # `ready -> parsing` edge below; a `queued` one is already where it needs
+        # to be.
+        await session.commit()
     else:
         document = Document(
             user_id=user_id,
@@ -124,44 +156,51 @@ async def ingest_document(
             mime_type="application/octet-stream",  # overwritten once sniffed, below
             size_bytes=size_bytes,
             sha256=sha256,
-            status="queued",
+            status=DocumentStatus.QUEUED,
             chunk_count=0,
         )
         session.add(document)
         await session.flush()  # assigns document.id before anything references it
+        # A row birth, not a transition — `transition()` governs UPDATEs only,
+        # so this is the one audit row ingestion still writes by hand.
+        _audit(session, user_id, document.id, "document_created")
+        await session.commit()
 
-    _audit(session, user_id, document.id, "ingest_queued")
-    await session.commit()
-
-    document.status = "parsing"
+    await transition(session, document.id, DocumentStatus.PARSING)
     await session.commit()
     try:
         mime_type, parsed = parse_file(path)
     except ParseError as exc:
-        document.status = "quarantined" if exc.kind is ParseErrorKind.UNSAFE_STRUCTURE else "failed"
+        outcome = (
+            DocumentStatus.QUARANTINED
+            if exc.kind is ParseErrorKind.UNSAFE_STRUCTURE
+            else DocumentStatus.FAILED
+        )
+        await transition(session, document.id, outcome, reason=exc.message)
         document.error = exc.message
-        _audit(session, user_id, document.id, "ingest_parse_failed")
         await session.commit()
         return document
 
     document.mime_type = mime_type
     document.page_count = len(parsed.pages)
-    document.status = "indexing"
+    await transition(session, document.id, DocumentStatus.INDEXING)
     await session.commit()
 
     chunked = chunk_document(parsed)
     if not chunked.chunks:
-        document.status = "failed"
         document.error = "No extractable content was found to index."
-        _audit(session, user_id, document.id, "ingest_no_chunks")
+        await transition(
+            session, document.id, DocumentStatus.FAILED, reason="no extractable content"
+        )
         await session.commit()
         return document
 
     total_tokens = sum(c.token_estimate for c in chunked.chunks)
     if total_tokens > EMBEDDING_MAX_TOKENS_PER_DOC:
-        document.status = "failed"
         document.error = "Document exceeds the indexing size limit."
-        _audit(session, user_id, document.id, "ingest_over_token_limit")
+        await transition(
+            session, document.id, DocumentStatus.FAILED, reason="exceeds indexing size limit"
+        )
         await session.commit()
         return document
 
@@ -190,9 +229,10 @@ async def ingest_document(
     try:
         vectors = await embedder.embed(texts, input_type="document")
     except EmbeddingError as exc:
-        document.status = "failed"
         document.error = "Indexing failed because the embedding service was unavailable."
-        _audit(session, user_id, document.id, "ingest_embedding_failed")
+        await transition(
+            session, document.id, DocumentStatus.FAILED, reason="embedding service unavailable"
+        )
         await session.commit()
         logger.warning("embedding failed", extra={"document_id": document.id, "reason": str(exc)})
         return document
@@ -230,10 +270,9 @@ async def ingest_document(
         documents=[c.text for c in chunk_rows],
     )
 
-    document.status = "ready"
+    await transition(session, document.id, DocumentStatus.READY)
     document.chunk_count = len(chunk_rows)
     document.indexed_at = datetime.now(UTC)
-    _audit(session, user_id, document.id, "ingest_ready")
     await session.commit()
     return document
 
