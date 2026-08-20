@@ -147,6 +147,14 @@ class VoyageEmbedder:
                 )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_exc = exc
+                logger.info(
+                    "embedding request failed, retrying",
+                    extra={
+                        "attempt": attempt + 1,
+                        "max_retries": self._max_retries,
+                        "reason": str(exc),
+                    },
+                )
                 await self._backoff(attempt, retry_after=None)
                 continue
 
@@ -161,9 +169,18 @@ class VoyageEmbedder:
                     f"Voyage returned {response.status_code}: {response.text[:200]}"
                 )
                 retry_after = response.headers.get("Retry-After")
-                await self._backoff(
-                    attempt, retry_after=float(retry_after) if retry_after else None
+                delay = float(retry_after) if retry_after else None
+                # Without this, a rate-limited call sleeps in total silence —
+                # from a synchronous CLI caller that looks identical to a hang.
+                logger.info(
+                    "embedding request throttled, retrying",
+                    extra={
+                        "attempt": attempt + 1,
+                        "max_retries": self._max_retries,
+                        "status_code": response.status_code,
+                    },
                 )
+                await self._backoff(attempt, retry_after=delay)
                 continue
 
             # Non-retryable 4xx — burning quota retrying a request that will

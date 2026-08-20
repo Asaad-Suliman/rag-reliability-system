@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MAX_TOKENS_PER_DOC = 500_000
 
 
+class NetworkNotAllowedError(RuntimeError):
+    """Raised by `ingest_document` when embedding is needed but the caller
+    hasn't passed `allow_network=True`. Always raised before anything is
+    deleted or changed — safe to retry with the flag set.
+    """
+
+
 def collection_name_for(embedder: Embedder) -> str:
     """One Chroma collection per (model, dimensions) pair, so switching
     embedding models can never silently mix incompatible vector spaces.
@@ -72,12 +79,23 @@ async def ingest_document(
     session: AsyncSession,
     vector_store: VectorStore,
     embedder: Embedder,
+    allow_network: bool = False,
 ) -> Document:
     """Full state machine for one file.
 
     Idempotent: re-ingesting an already-`ready` document (same user, same
     content hash) is a no-op that spends nothing. Re-ingesting a
     `failed`/`quarantined`/interrupted one retries in place, from `queued`.
+
+    `allow_network` gates the one place this function can spend money. It
+    defaults to `False`: if chunking produces anything that needs embedding,
+    this raises `NetworkNotAllowedError` — the function's only raise path,
+    everything else is a returned `Document` with `.status`/`.error` set —
+    rather than silently calling the embedder. This isn't a processing
+    outcome on the document's content the way the six contract statuses are;
+    it's a caller-side consent gate that hasn't been granted, so it doesn't
+    fit the status model. The gate runs before anything is deleted, so a
+    refusal has zero side effects and is always safe to retry.
     """
     sha256 = _sha256_file(path)
     size_bytes = path.stat().st_size
@@ -144,12 +162,26 @@ async def ingest_document(
         await session.commit()
         return document
 
+    # Gate placed here deliberately, before the delete below: refusing after
+    # the delete would have already destroyed real chunks/vectors with no way
+    # to roll back (Chroma has no transactional link to this session). A
+    # refusal here touches nothing that already existed.
+    if not allow_network:
+        raise NetworkNotAllowedError(
+            f"Embedding {len(chunked.chunks)} chunks (~{total_tokens} estimated tokens) "
+            "requires allow_network=True. Nothing was deleted or changed — retry with the "
+            "flag set to proceed."
+        )
+
     collection_name = collection_name_for(embedder)
     # A no-op for a fresh document (nothing was ever written for it), but
     # protects any future caller that resets a 'ready' document back to
     # 'queued' to force a reindex — old chunks/vectors must not survive that.
     await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
     await vector_store.delete_by_document(collection_name, document.id)
+    # Reflects reality immediately: if embedding now fails, chunk_count must
+    # not still claim a chunk count that was just deleted above.
+    document.chunk_count = 0
 
     texts = [c.text for c in chunked.chunks]
     try:
@@ -218,6 +250,7 @@ async def delete_document(
 
 def _demo() -> None:
     import asyncio
+    import os
     import tempfile
 
     from app.core.config import get_settings
@@ -247,7 +280,13 @@ def _demo() -> None:
 
                 try:
                     doc = await ingest_document(
-                        corpus, corpus.name, user_id, session, vector_store, embedder
+                        corpus,
+                        corpus.name,
+                        user_id,
+                        session,
+                        vector_store,
+                        embedder,
+                        allow_network=True,
                     )
                     assert doc.status == "ready", doc.error
                     assert doc.chunk_count > 0
@@ -280,6 +319,49 @@ def _demo() -> None:
                     )
                     assert remaining == []
                     assert await vector_store.count(collection_name) == 0
+
+                    # Network gate: a document needing embedding must refuse
+                    # without allow_network=True, and touch nothing when it does.
+                    fd, gate_check_name = tempfile.mkstemp(suffix=".txt")
+                    os.close(fd)
+                    gate_check_path = Path(gate_check_name)
+                    gate_check_path.write_text("Content that will need embedding once chunked.")
+                    try:
+                        raised = False
+                        try:
+                            await ingest_document(
+                                gate_check_path,
+                                "network-gate-check.txt",
+                                user_id,
+                                session,
+                                vector_store,
+                                embedder,
+                            )
+                        except NetworkNotAllowedError:
+                            raised = True
+                        assert raised, "expected NetworkNotAllowedError without allow_network=True"
+
+                        gated_doc = (
+                            await session.execute(
+                                select(Document).where(
+                                    Document.filename == "network-gate-check.txt"
+                                )
+                            )
+                        ).scalar_one()
+                        assert gated_doc.status == "indexing", gated_doc.status
+                        assert gated_doc.chunk_count == 0
+                        gated_chunks = (
+                            (
+                                await session.execute(
+                                    select(Chunk).where(Chunk.document_id == gated_doc.id)
+                                )
+                            )
+                            .scalars()
+                            .all()
+                        )
+                        assert gated_chunks == [], "a refused ingest must not write any chunks"
+                    finally:
+                        gate_check_path.unlink(missing_ok=True)
                 finally:
                     await session.execute(delete(User).where(User.id == user_id))
                     await session.commit()

@@ -10,8 +10,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, ValidationError
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# app/core/config.py -> app/core -> app -> repo root. Anchoring here, not to
+# the process's CWD, matters because `ingest_root` is a security boundary:
+# resolving a relative default against CWD would let the allowlist silently
+# point somewhere else if the CLI is ever launched from outside the repo.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class SettingsError(RuntimeError):
@@ -40,6 +46,20 @@ class Settings(BaseSettings):
 
     # --- chroma ---
     chroma_persist_dir: Path = Path("data/chroma")
+
+    # --- ingestion ---
+    # The controlled directory parsing must stay inside — the CLI's `ingest`
+    # resolves its path argument and rejects anything outside this root.
+    # Resolved below to an absolute, symlink-canonical path at load time, so
+    # the security boundary itself can never be ambiguous or CWD-dependent.
+    ingest_root: Path = Path("data/uploads")
+
+    @field_validator("ingest_root")
+    @classmethod
+    def _resolve_ingest_root(cls, v: Path) -> Path:
+        if v.is_absolute():
+            return v.resolve()
+        return (_REPO_ROOT / v).resolve()
 
     # --- llm provider (required) ---
     llm_api_key: SecretStr
