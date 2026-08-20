@@ -53,7 +53,10 @@ def collection_name_for(embedder: Embedder) -> str:
     return f"chunks_{slug}_{embedder.dimensions}"
 
 
-def _sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """Public: the CLI's `reindex` reuses this to verify a `--file` argument's
+    content still matches the document it claims to replace.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as f:
         for block in iter(lambda: f.read(1024 * 1024), b""):
@@ -97,7 +100,7 @@ async def ingest_document(
     fit the status model. The gate runs before anything is deleted, so a
     refusal has zero side effects and is always safe to retry.
     """
-    sha256 = _sha256_file(path)
+    sha256 = sha256_file(path)
     size_bytes = path.stat().st_size
 
     existing = (
@@ -303,6 +306,11 @@ def _demo() -> None:
                     vector_count = await vector_store.count(collection_name)
                     assert vector_count == doc.chunk_count, (vector_count, doc.chunk_count)
 
+                    # Per-document count matches too -- the CLI's `stats` consistency
+                    # check compares exactly this against Postgres chunk_count.
+                    per_doc_count = await vector_store.count_by_document(collection_name, doc.id)
+                    assert per_doc_count == doc.chunk_count, (per_doc_count, doc.chunk_count)
+
                     # Re-ingest the same bytes: dedupe, same document, no new rows.
                     doc2 = await ingest_document(
                         corpus, corpus.name, user_id, session, vector_store, embedder
@@ -319,6 +327,7 @@ def _demo() -> None:
                     )
                     assert remaining == []
                     assert await vector_store.count(collection_name) == 0
+                    assert await vector_store.count_by_document(collection_name, doc.id) == 0
 
                     # Network gate: a document needing embedding must refuse
                     # without allow_network=True, and touch nothing when it does.

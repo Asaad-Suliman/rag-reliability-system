@@ -67,6 +67,14 @@ class VectorStore(Protocol):
 
     async def count(self, collection_name: str) -> int: ...
 
+    async def count_by_document(self, collection_name: str, document_id: str) -> int:
+        """Number of vectors tagged with this `document_id`. Read-only — lets a
+        caller (the CLI's `stats`) compare against Postgres `chunk_count`
+        without deleting anything, to detect an interrupted delete/reindex
+        that left the two stores disagreeing.
+        """
+        ...
+
 
 class ChromaVectorStore:
     """Persistent, on-disk Chroma. Connects lazily so a dead store can recover."""
@@ -161,13 +169,19 @@ class ChromaVectorStore:
     ) -> list[VectorHit]:
         return await asyncio.to_thread(self._query_sync, collection_name, vector, top_k, where)
 
+    def _count_by_document_sync(self, collection_name: str, document_id: str) -> int:
+        collection = self._get_collection(collection_name)
+        matched = collection.get(where=cast(Any, {"document_id": document_id}), include=[])
+        return len(matched["ids"])
+
+    async def count_by_document(self, collection_name: str, document_id: str) -> int:
+        return await asyncio.to_thread(self._count_by_document_sync, collection_name, document_id)
+
     def _delete_by_document_sync(self, collection_name: str, document_id: str) -> int:
         collection = self._get_collection(collection_name)
-        where = {"document_id": document_id}
-        matched = collection.get(where=cast(Any, where), include=[])
-        count = len(matched["ids"])
+        count = self._count_by_document_sync(collection_name, document_id)
         if count:
-            collection.delete(where=cast(Any, where))
+            collection.delete(where=cast(Any, {"document_id": document_id}))
         return count
 
     async def delete_by_document(self, collection_name: str, document_id: str) -> int:

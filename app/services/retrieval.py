@@ -11,6 +11,7 @@ that produced it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -176,6 +177,7 @@ async def vector_search(
 def _rrf_fuse(
     lexical_hits: list[_LexicalHit],
     vector_hits: list[_VectorHit],
+    rrf_k: int = RRF_K,
 ) -> dict[str, tuple[float, int | None, float | None, int | None, float | None]]:
     """Rank-based fusion. Returns chunk_id -> (rrf_score, lex_rank, lex_score,
     vec_rank, vec_distance). A chunk found by both arms merges into one entry
@@ -183,15 +185,22 @@ def _rrf_fuse(
     the chunker's own 300-char overlap between adjacent chunks means a
     span-overlap rule would drop the neighbour chunk that q11-q13 in the
     golden set specifically need retrieved alongside it.
+
+    `rrf_k` overrides the module default for this call only — a mechanism
+    for the CLI's `--rrf-k` flag, not a re-tune of the shipped default.
+    When one of the two hit lists is empty (the CLI's lexical-only/
+    vector-only modes), the formula degenerates correctly on its own: with
+    only one arm contributing, `1/(rrf_k+rank)` is monotonic in that arm's
+    rank, so the fused order exactly reproduces that arm's own order.
     """
     fused: dict[str, tuple[float, int | None, float | None, int | None, float | None]] = {}
 
     for rank, lhit in enumerate(lexical_hits, start=1):
-        score = 1.0 / (RRF_K + rank)
+        score = 1.0 / (rrf_k + rank)
         fused[lhit.chunk_id] = (score, rank, lhit.score, None, None)
 
     for rank, vhit in enumerate(vector_hits, start=1):
-        score = 1.0 / (RRF_K + rank)
+        score = 1.0 / (rrf_k + rank)
         if vhit.chunk_id in fused:
             prev_score, lex_rank, lex_score, _, _ = fused[vhit.chunk_id]
             fused[vhit.chunk_id] = (prev_score + score, lex_rank, lex_score, rank, vhit.distance)
@@ -210,16 +219,32 @@ async def retrieve(
     candidate_k: int = DEFAULT_CANDIDATE_K,
     document_ids: list[str] | None = None,
     query_vector: list[float] | None = None,
+    arm: Literal["hybrid", "lexical", "vector"] = "hybrid",
+    rrf_k: int = RRF_K,
 ) -> list[RetrievedChunk]:
     """Fused hybrid retrieval. Both arms fetch `candidate_k` so RRF has depth
     to fuse before truncating to `top_k`. `query_vector` passes through to
     `vector_search` — see its docstring.
+
+    `arm` restricts which retriever(s) actually run: `"lexical"` skips
+    `vector_search` entirely — no embedding call, genuinely $0 — and
+    `"vector"` skips `lexical_search`. `"hybrid"` (default) runs both and
+    fuses, unchanged from before this parameter existed. `rrf_k` passes
+    through to `_rrf_fuse` — see its docstring.
     """
-    lexical_hits = await lexical_search(session, query, candidate_k, document_ids)
-    vector_hits = await vector_search(
-        vector_store, embedder, query, candidate_k, document_ids, query_vector=query_vector
+    lexical_hits = (
+        await lexical_search(session, query, candidate_k, document_ids)
+        if arm in ("hybrid", "lexical")
+        else []
     )
-    fused = _rrf_fuse(lexical_hits, vector_hits)
+    vector_hits = (
+        await vector_search(
+            vector_store, embedder, query, candidate_k, document_ids, query_vector=query_vector
+        )
+        if arm in ("hybrid", "vector")
+        else []
+    )
+    fused = _rrf_fuse(lexical_hits, vector_hits, rrf_k=rrf_k)
 
     by_id: dict[str, _LexicalHit | _VectorHit] = {}
     for lhit in lexical_hits:

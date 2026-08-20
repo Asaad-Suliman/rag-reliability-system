@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.embeddings import Embedder
 from app.services.retrieval import (
     DEFAULT_CANDIDATE_K,
+    RRF_K,
     lexical_search,
     retrieve,
     vector_search,
@@ -121,6 +122,8 @@ class EvaluationReport:
     vector: ArmMetrics
     hybrid: ArmMetrics
     abstention_scores: dict[str, float]  # unanswerable question id -> top-1 rrf_score
+    rrf_k: int
+    candidate_k: int
 
 
 async def evaluate(
@@ -130,6 +133,7 @@ async def evaluate(
     golden_set_path: Path = GOLDEN_SET_PATH,
     cache_path: Path = QUERY_EMBEDDINGS_CACHE_PATH,
     candidate_k: int = DEFAULT_CANDIDATE_K,
+    rrf_k: int = RRF_K,
     allow_network: bool = False,
 ) -> EvaluationReport:
     """Run all three retrieval arms over the golden set.
@@ -174,6 +178,7 @@ async def evaluate(
             top_k=candidate_k,
             candidate_k=candidate_k,
             query_vector=query_vector,
+            rrf_k=rrf_k,
         )
 
         lexical_scores.append(_rank_metrics([h.chunk_id for h in lexical_hits], gold))
@@ -191,6 +196,7 @@ async def evaluate(
             top_k=1,
             candidate_k=candidate_k,
             query_vector=vectors[q["id"]],
+            rrf_k=rrf_k,
         )
         abstention_scores[q["id"]] = hits[0].rrf_score if hits else 0.0
 
@@ -199,11 +205,14 @@ async def evaluate(
         vector=_aggregate(vector_scores),
         hybrid=_aggregate(hybrid_scores),
         abstention_scores=abstention_scores,
+        rrf_k=rrf_k,
+        candidate_k=candidate_k,
     )
 
 
 def format_report(report: EvaluationReport) -> str:
     lines = [
+        f"rrf_k={report.rrf_k} candidate_k={report.candidate_k}",
         f"{'arm':<10} {'n':>3}  " + "  ".join(f"recall@{k:<3}" for k in RECALL_KS) + "     mrr",
     ]
     arms = (("lexical", report.lexical), ("vector", report.vector), ("hybrid", report.hybrid))

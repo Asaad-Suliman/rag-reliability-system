@@ -127,3 +127,22 @@ def configure_logging(level: str) -> None:
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+
+
+def configure_cli_logging(level: str) -> None:
+    """Same JSON formatting and secret redaction as `configure_logging`, but
+    routed to stderr instead of stdout.
+
+    A separate function, not a `stream=` parameter on `configure_logging`,
+    so `main.py`'s call site and behavior are completely untouched — the CLI
+    reserves stdout for command results (so e.g. `query` output stays
+    pipeable) and never calls `configure_logging` itself. No uvicorn handler
+    cleanup here: the CLI process never runs uvicorn.
+    """
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(JsonFormatter())
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(level)
