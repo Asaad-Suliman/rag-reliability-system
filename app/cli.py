@@ -38,6 +38,7 @@ from app.services.ingestion import (
     ingest_document,
     sha256_file,
 )
+from app.services.reranking import RERANK_N, Reranker, RerankerBackend, build_reranker
 from app.services.retrieval import DEFAULT_CANDIDATE_K, DEFAULT_TOP_K, RRF_K, retrieve
 from app.services.vector_store import ChromaVectorStore, VectorStore
 
@@ -64,6 +65,23 @@ TERMINAL_FAILURE_STATUSES = ("failed", "quarantined")
 
 class UnavailableError(RuntimeError):
     """Postgres or Chroma didn't answer within CHECK_TIMEOUT_SECONDS."""
+
+
+def _build_reranker(settings: Settings, choice: RerankerBackend) -> Reranker:
+    """Built per command rather than in `_dispatch`, so `stats`/`delete`/`ingest`
+    never pay the load — or fail on a clone that has not fetched the weights.
+    Within a command it is still built once, before the query, never per call.
+
+    A `RerankerModelMissing` here propagates: it subclasses RuntimeError, so
+    `main()` already reports it as `refused:` with exit 4 and no traceback.
+    Falling back to NoOp would be the silent degradation this system forbids.
+    """
+    return build_reranker(
+        choice,
+        model_dir=settings.reranker_model_dir,
+        manifest_path=settings.reranker_manifest_path,
+        intra_op_threads=settings.reranker_intra_op_threads,
+    )
 
 
 def _build_embedder(settings: Settings) -> Embedder:
@@ -171,18 +189,33 @@ async def _cmd_query(
     if args.arm in ("vector", "hybrid"):
         print(f"embedding query via {embedder.model}...", file=sys.stderr)
 
-    result = await retrieve(
-        text_query,
-        session,
-        vector_store,
-        embedder,
-        top_k=args.top_k,
-        candidate_k=args.candidate_k,
-        document_ids=args.document_ids,
-        arm=args.arm,
-        rrf_k=args.rrf_k,
-    )
+    backend: RerankerBackend = args.reranker or settings.reranker
+    reranker = _build_reranker(settings, backend)
+    try:
+        result = await retrieve(
+            text_query,
+            session,
+            vector_store,
+            embedder,
+            top_k=args.top_k,
+            candidate_k=args.candidate_k,
+            document_ids=args.document_ids,
+            arm=args.arm,
+            rrf_k=args.rrf_k,
+            reranker=reranker,
+            rerank_n=args.rerank_n,
+        )
+    finally:
+        reranker.close()
     hits = result.hits
+    if result.rerank is not None and result.rerank.n_candidates:
+        t = result.rerank
+        print(
+            f"rerank: backend={backend} candidates={t.n_candidates} "
+            f"truncated={t.n_truncated} infer={t.infer_ms:.0f}ms "
+            f"threads={t.intra_op_threads}",
+            file=sys.stderr,
+        )
 
     if not hits:
         print("no results")
@@ -193,8 +226,9 @@ async def _cmd_query(
             f"{i}. [{hit.chunk_id}] {hit.document_id} ({hit.document_name}) "
             f"p.{hit.page} ({hit.char_start}-{hit.char_end})"
         )
+        rerank_col = "" if hit.rerank_score is None else f"rerank_score={hit.rerank_score:.4f} "
         print(
-            f"   rrf_score={hit.rrf_score:.4f} "
+            f"   {rerank_col}rrf_score={hit.rrf_score:.4f} "
             f"lexical_rank={hit.lexical_rank} lexical_score={hit.lexical_score} "
             f"vector_rank={hit.vector_rank} vector_distance={hit.vector_distance}"
         )
@@ -315,14 +349,20 @@ async def _cmd_evaluate(
     args: argparse.Namespace, settings: Settings, session: AsyncSession, vector_store: VectorStore
 ) -> int:
     embedder = _build_embedder(settings)
-    report = await evaluate(
-        session,
-        vector_store,
-        embedder,
-        candidate_k=args.candidate_k,
-        rrf_k=args.rrf_k,
-        allow_network=args.allow_network,
-    )
+    reranker = _build_reranker(settings, args.reranker)
+    try:
+        report = await evaluate(
+            session,
+            vector_store,
+            embedder,
+            candidate_k=args.candidate_k,
+            rrf_k=args.rrf_k,
+            allow_network=args.allow_network,
+            reranker=reranker,
+            rerank_n=args.rerank_n,
+        )
+    finally:
+        reranker.close()
     print(format_report(report))
     return EXIT_OK
 
@@ -383,6 +423,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("--candidate-k", type=int, default=DEFAULT_CANDIDATE_K)
     p_query.add_argument("--rrf-k", type=int, default=RRF_K)
     p_query.add_argument("--document-id", action="append", dest="document_ids", default=None)
+    # Default None, not "local": falls through to RERANKER in the environment,
+    # so the flag overrides config rather than shadowing it.
+    p_query.add_argument("--reranker", choices=("none", "local"), default=None)
+    p_query.add_argument("--rerank-n", type=int, default=RERANK_N)
 
     p_reindex = sub.add_parser("reindex", help="Force a document back through the pipeline")
     p_reindex.add_argument("doc_id")
@@ -395,6 +439,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_evaluate.add_argument("--allow-network", action="store_true")
     p_evaluate.add_argument("--rrf-k", type=int, default=RRF_K)
     p_evaluate.add_argument("--candidate-k", type=int, default=DEFAULT_CANDIDATE_K)
+    # "none" regardless of RERANKER, unlike `query`. The benchmark's baseline
+    # arm is no-rerank by definition, and it must not move because someone
+    # changed an env var: `evaluate` with no flags has to keep reproducing the
+    # recorded gate figures. Chunk 5 passes --reranker local explicitly.
+    p_evaluate.add_argument("--reranker", choices=("none", "local"), default="none")
+    p_evaluate.add_argument("--rerank-n", type=int, default=RERANK_N)
 
     p_delete = sub.add_parser("delete", help="Delete a document and its vectors")
     p_delete.add_argument("doc_id")

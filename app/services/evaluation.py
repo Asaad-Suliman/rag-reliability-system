@@ -16,7 +16,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,9 +26,7 @@ from app.services.reranking import NOOP_RERANKER, RERANK_N, Reranker
 from app.services.retrieval import (
     DEFAULT_CANDIDATE_K,
     RRF_K,
-    lexical_search,
     retrieve,
-    vector_search,
 )
 from app.services.vector_store import VectorStore
 
@@ -308,6 +306,39 @@ async def evaluate(
         questions_by_id, embedder, cache_path, allow_network=allow_network
     )
 
+    # Every arm goes through retrieve(), including lexical and vector.
+    #
+    # They used to call lexical_search()/vector_search() directly, which was fine
+    # while retrieval was the only stage — but the reranker lives in retrieve(),
+    # so the direct calls silently skipped it and `--reranker local` reranked the
+    # hybrid arm alone. That made chunk 5's "vector + rerank" arm unproducible,
+    # and worse, would have compared a reranked hybrid against an un-reranked
+    # vector-only and read the difference as a fusion result.
+    #
+    # Safe for the no-rerank baseline: _rrf_fuse() degenerates to the single
+    # arm's own order when the other hit list is empty (see its docstring), so
+    # with NoOpReranker every recorded figure is unchanged — asserted by the
+    # regression gate, not assumed.
+    async def arm_hits(
+        query: str,
+        query_vector: list[float],
+        arm: Literal["hybrid", "lexical", "vector"],
+    ) -> list[str]:
+        result = await retrieve(
+            query,
+            session,
+            vector_store,
+            embedder,
+            top_k=rerank_n,
+            candidate_k=candidate_k,
+            query_vector=query_vector,
+            arm=arm,
+            rrf_k=rrf_k,
+            reranker=reranker,
+            rerank_n=rerank_n,
+        )
+        return [h.chunk_id for h in result.hits]
+
     lexical_scores: list[tuple[dict[int, float], float]] = []
     vector_scores: list[tuple[dict[int, float], float]] = []
     hybrid_scores: list[tuple[dict[int, float], float]] = []
@@ -317,27 +348,9 @@ async def evaluate(
         gold = gold_by_id[q.id]
         query_vector = vectors[q.id]
 
-        lexical_hits = await lexical_search(session, query, candidate_k, None)
-        vector_hits = await vector_search(
-            vector_store, embedder, query, candidate_k, None, query_vector=query_vector
-        )
-        hybrid = await retrieve(
-            query,
-            session,
-            vector_store,
-            embedder,
-            top_k=rerank_n,
-            candidate_k=candidate_k,
-            query_vector=query_vector,
-            rrf_k=rrf_k,
-            reranker=reranker,
-            rerank_n=rerank_n,
-        )
-        hybrid_hits = hybrid.hits
-
-        lexical_scores.append(_rank_metrics([h.chunk_id for h in lexical_hits], gold))
-        vector_scores.append(_rank_metrics([h.chunk_id for h in vector_hits], gold))
-        hybrid_scores.append(_rank_metrics([h.chunk_id for h in hybrid_hits], gold))
+        lexical_scores.append(_rank_metrics(await arm_hits(query, query_vector, "lexical"), gold))
+        vector_scores.append(_rank_metrics(await arm_hits(query, query_vector, "vector"), gold))
+        hybrid_scores.append(_rank_metrics(await arm_hits(query, query_vector, "hybrid"), gold))
 
     abstention_scores: dict[str, float] = {}
     for q in unanswerable:
