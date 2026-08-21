@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.embeddings import Embedder
+from app.services.reranking import NOOP_RERANKER, RERANK_N, Reranker
 from app.services.retrieval import (
     DEFAULT_CANDIDATE_K,
     RRF_K,
@@ -33,7 +34,7 @@ from app.services.vector_store import VectorStore
 
 GOLDEN_SET_PATH = Path("tests/fixtures/golden_set_v3.json")
 QUERY_EMBEDDINGS_CACHE_PATH = Path("tests/fixtures/query_embeddings.json")
-RECALL_KS = (5, 10)
+RECALL_KS = (5, 10, 30)
 
 
 class GoldenSetError(RuntimeError):
@@ -250,6 +251,8 @@ async def evaluate(
     candidate_k: int = DEFAULT_CANDIDATE_K,
     rrf_k: int = RRF_K,
     allow_network: bool = False,
+    reranker: Reranker = NOOP_RERANKER,
+    rerank_n: int = RERANK_N,
 ) -> EvaluationReport:
     """Run all three retrieval arms over the golden set.
 
@@ -288,16 +291,19 @@ async def evaluate(
         vector_hits = await vector_search(
             vector_store, embedder, query, candidate_k, None, query_vector=query_vector
         )
-        hybrid_hits = await retrieve(
+        hybrid = await retrieve(
             query,
             session,
             vector_store,
             embedder,
-            top_k=candidate_k,
+            top_k=rerank_n,
             candidate_k=candidate_k,
             query_vector=query_vector,
             rrf_k=rrf_k,
+            reranker=reranker,
+            rerank_n=rerank_n,
         )
+        hybrid_hits = hybrid.hits
 
         lexical_scores.append(_rank_metrics([h.chunk_id for h in lexical_hits], gold))
         vector_scores.append(_rank_metrics([h.chunk_id for h in vector_hits], gold))
@@ -305,7 +311,7 @@ async def evaluate(
 
     abstention_scores: dict[str, float] = {}
     for q in unanswerable:
-        hits = await retrieve(
+        abstention = await retrieve(
             q.question,
             session,
             vector_store,
@@ -314,7 +320,14 @@ async def evaluate(
             candidate_k=candidate_k,
             query_vector=vectors[q.id],
             rrf_k=rrf_k,
+            reranker=reranker,
+            rerank_n=rerank_n,
         )
+        # Still rrf_score, still top-1, so this column stays comparable to
+        # chunk 3's. DECISIONS.md (2026-08-19) already records that rrf_score
+        # cannot signal abstention at all; chunk 5 replaces this with the
+        # reranker's score, and that is a chunk 5 decision, not a wiring one.
+        hits = abstention.hits
         abstention_scores[q.id] = hits[0].rrf_score if hits else 0.0
 
     return EvaluationReport(
@@ -375,7 +388,10 @@ def _demo() -> None:
     gold = {"chk_a", "chk_b"}
     recall_at, mrr = _rank_metrics(["chk_x", "chk_a", "chk_y", "chk_b", "chk_z"], gold)
     assert recall_at[5] == 1.0, recall_at  # both gold chunks present in top 5
-    assert recall_at == {5: 1.0, 10: 1.0}
+    # Keyed off RECALL_KS, not a literal dict: recall@30 was added in chunk 4 as
+    # the rerank ceiling, and a hardcoded dict breaks on the next depth added
+    # rather than adapting to it.
+    assert recall_at == dict.fromkeys(RECALL_KS, 1.0), recall_at
     assert mrr == 1 / 2, mrr  # first gold chunk (chk_a) at rank 2
 
     recall_at2, mrr2 = _rank_metrics(["chk_x", "chk_y"], gold)
