@@ -13,6 +13,7 @@ one-time cost.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -74,6 +75,14 @@ ABSTAINED = "ABSTAINED"  # span retrieved, system abstained — correct
 ANSWERED = "ANSWERED"  # span retrieved, system answered — confabulation, failure
 UNSCORED = "UNSCORED"  # span not retrieved — no verdict is available either way
 
+# Every arm the benchmark runs, in report order. Near-miss coverage is computed
+# for each of them, because coverage is a property of the ARM, not of the golden
+# set: measured at ABSTENTION_TOP_K=1 with no reranker, lexical scores 2/6,
+# vector 2/6 and hybrid 4/6, and lexical and vector share exactly one item. A
+# single collapsed coverage number invites the cross-arm comparison that those
+# three sets make invalid.
+ARMS: tuple[Literal["lexical", "vector", "hybrid"], ...] = ("lexical", "vector", "hybrid")
+
 
 def near_miss_outcome(span_retrieved: bool, abstained: bool | None) -> str | None:
     """Pure. `abstained` is None when no abstention decision is wired, which is
@@ -88,6 +97,36 @@ def near_miss_outcome(span_retrieved: bool, abstained: bool | None) -> str | Non
     if abstained is None:
         return None
     return ABSTAINED if abstained else ANSWERED
+
+
+@dataclass(frozen=True)
+class NearMissCoverage:
+    """One arm's near-miss scoring. Per arm because coverage *is* per arm.
+
+    Counts are derived, never stored: a stored `n_scored` can drift out of step
+    with the dict it summarises, and this is precisely the number nobody may be
+    allowed to get wrong.
+    """
+
+    arm: str
+    retrieved: dict[str, bool]
+    outcomes: dict[str, str | None]
+
+    @property
+    def scored_ids(self) -> tuple[str, ...]:
+        return tuple(qid for qid, ok in self.retrieved.items() if ok)
+
+    @property
+    def unscored_ids(self) -> tuple[str, ...]:
+        return tuple(qid for qid, ok in self.retrieved.items() if not ok)
+
+    @property
+    def n_scored(self) -> int:
+        return len(self.scored_ids)
+
+    @property
+    def n_unscored(self) -> int:
+        return len(self.unscored_ids)
 
 
 class GoldenSetError(RuntimeError):
@@ -304,15 +343,12 @@ class EvaluationReport:
     reranker: str
     mrr_depth: int
     rerank_n: int
-    # --- near-miss abstention scoring ---
-    # `near_miss_outcomes` values are None for a SCORED item while no abstention
-    # decision is wired (see `near_miss_outcome`). n_scored/n_unscored are fields
-    # rather than something the reader derives, so an abstention rate can never
-    # be read off this report without the coverage it was fitted on.
-    near_miss_retrieved: dict[str, bool]
-    near_miss_outcomes: dict[str, str | None]
-    n_scored: int
-    n_unscored: int
+    # --- near-miss abstention scoring, one entry per arm ---
+    # Keyed by arm name, because an arm's abstention rate is fitted on the items
+    # *that arm* actually retrieved the near_miss_to span for, and the arms do
+    # not agree on which those are. Collapsing this to one number would hide the
+    # only fact that says whether two arms' rates may be compared at all.
+    near_miss: dict[str, NearMissCoverage]
     abstention_top_k: int
 
 
@@ -405,44 +441,64 @@ async def evaluate(
         vector_scores.append(_rank_metrics(await arm_hits(query, query_vector, "vector"), gold))
         hybrid_scores.append(_rank_metrics(await arm_hits(query, query_vector, "hybrid"), gold))
 
-    abstention_scores: dict[str, float] = {}
-    near_miss_retrieved: dict[str, bool] = {}
-    near_miss_outcomes: dict[str, str | None] = {}
-    for q in unanswerable:
-        abstention = await retrieve(
-            q.question,
+    # The abstention sibling of `arm_hits` above. Separate rather than shared
+    # because the two differ in exactly the way that matters: this one runs at
+    # ABSTENTION_TOP_K, and it returns the Retrieval rather than bare ids,
+    # because `abstained_by` decides from the whole result.
+    async def abstention_retrieval(
+        query: str,
+        query_vector: list[float],
+        arm: Literal["hybrid", "lexical", "vector"],
+    ) -> Retrieval:
+        return await retrieve(
+            query,
             session,
             vector_store,
             embedder,
             top_k=ABSTENTION_TOP_K,
             candidate_k=candidate_k,
-            query_vector=vectors[q.id],
+            query_vector=query_vector,
+            arm=arm,
             rrf_k=rrf_k,
             reranker=reranker,
             rerank_n=rerank_n,
         )
-        # Still rrf_score, still top-1, so this column stays comparable to
-        # chunk 3's. DECISIONS.md (2026-08-19) already records that rrf_score
-        # cannot signal abstention at all; chunk 5 replaces this with the
-        # reranker's score, and that is a chunk 5 decision, not a wiring one.
-        hits = abstention.hits
-        abstention_scores[q.id] = hits[0].rrf_score if hits else 0.0
 
-        # "Retrieved" is the answerable path's rule, unchanged and not
-        # re-derived: `resolve_gold_chunk_ids` already mapped this entry's
-        # `near_miss_to` span to its owning chunk by containment (it runs over
-        # every entry, not just the answerable ones), and the test is chunk-id
-        # membership — the same `set(...) & gold` form `_rank_metrics` uses.
-        #
-        # Against `hits`, i.e. the ABSTENTION_TOP_K the decision actually
-        # consumed. Not recall@10, not the rerank_n=40 pool retrieve() built and
-        # cut away: scoring against a set the decision never saw would credit
-        # the abstention to evidence it never had.
-        retrieved = bool({h.chunk_id for h in hits} & gold_by_id[q.id])
-        near_miss_retrieved[q.id] = retrieved
-        near_miss_outcomes[q.id] = near_miss_outcome(
-            retrieved, None if abstained_by is None else abstained_by(abstention)
-        )
+    abstention_scores: dict[str, float] = {}
+    near_miss: dict[str, NearMissCoverage] = {}
+    for arm in ARMS:
+        retrieved: dict[str, bool] = {}
+        outcomes: dict[str, str | None] = {}
+        for q in unanswerable:
+            abstention = await abstention_retrieval(q.question, vectors[q.id], arm)
+            hits = abstention.hits
+
+            if arm == "hybrid":
+                # Hybrid only, still rrf_score, still top-1, so this column stays
+                # comparable to chunk 3's recorded figures. DECISIONS.md
+                # (2026-08-19) already records that rrf_score cannot signal
+                # abstention at all; chunk 5 replaces this with the reranker's
+                # score, and that is a chunk 5 decision, not a wiring one.
+                abstention_scores[q.id] = hits[0].rrf_score if hits else 0.0
+
+            # "Retrieved" is the answerable path's rule, unchanged and not
+            # re-derived: `resolve_gold_chunk_ids` already mapped this entry's
+            # `near_miss_to` span to its owning chunk by containment (it runs
+            # over every entry, not just the answerable ones), and the test is
+            # chunk-id membership — the same `set(...) & gold` form
+            # `_rank_metrics` uses.
+            #
+            # Against `hits`, i.e. the ABSTENTION_TOP_K *this arm's* decision
+            # actually consumed. Not recall@10, not the rerank_n=40 pool
+            # retrieve() built and cut away, and never another arm's hits:
+            # scoring against a set the decision never saw would credit the
+            # abstention to evidence it never had.
+            ok = bool({h.chunk_id for h in hits} & gold_by_id[q.id])
+            retrieved[q.id] = ok
+            outcomes[q.id] = near_miss_outcome(
+                ok, None if abstained_by is None else abstained_by(abstention)
+            )
+        near_miss[arm] = NearMissCoverage(arm=arm, retrieved=retrieved, outcomes=outcomes)
 
     return EvaluationReport(
         lexical=_aggregate(lexical_scores),
@@ -458,10 +514,7 @@ async def evaluate(
         reranker=type(reranker).__name__,
         mrr_depth=MRR_DEPTH,
         rerank_n=rerank_n,
-        near_miss_retrieved=near_miss_retrieved,
-        near_miss_outcomes=near_miss_outcomes,
-        n_scored=sum(near_miss_retrieved.values()),
-        n_unscored=sum(not ok for ok in near_miss_retrieved.values()),
+        near_miss=near_miss,
         abstention_top_k=ABSTENTION_TOP_K,
     )
 
@@ -488,66 +541,95 @@ def format_report(report: EvaluationReport) -> str:
     return "\n".join(lines)
 
 
-def _abstention_rate(report: EvaluationReport) -> str:
-    """The rate line, which never renders as a bare number.
+def _abstention_rate(coverage: NearMissCoverage) -> str:
+    """One arm's rate, which never renders as a bare number.
 
-    It always carries its own denominator and the coverage it was fitted on, so
-    it cannot be quoted without them. Two cases deliberately refuse to produce a
-    number at all: no decision wired (there is no rate to compute), and zero
-    scored items — `0/0` printed as `0.000` would read as "abstained on nothing"
-    when the truth is "measured nothing".
+    It always carries its own denominator, and the row it sits on carries the
+    coverage that denominator came from. Two cases deliberately refuse to
+    produce a number at all: no decision wired (there is no rate to compute),
+    and zero scored items — `0/0` printed as `0.000` would read as "abstained on
+    nothing" when the truth is "measured nothing".
     """
-    n = report.n_unanswerable
-    scored = [
-        outcome
-        for qid, outcome in report.near_miss_outcomes.items()
-        if report.near_miss_retrieved[qid]
-    ]
+    scored = [coverage.outcomes[qid] for qid in coverage.scored_ids]
     if not scored:
-        return f"n/a (0 scored of {n})"
+        return "n/a (0 scored)"
     if any(outcome is None for outcome in scored):
-        return f"n/a — no abstention decision wired; {report.n_scored} scored of {n}"
+        return "n/a — no decision wired"
     correct = sum(outcome == ABSTAINED for outcome in scored)
-    return (
-        f"{correct}/{len(scored)} = {correct / len(scored):.3f} over SCORED items "
-        f"(coverage {report.n_scored}/{n})"
-    )
+    return f"{correct}/{len(scored)} = {correct / len(scored):.3f}"
+
+
+def _cross_arm_lines(report: EvaluationReport) -> list[str]:
+    """Whether the rate column may be read across rows at all.
+
+    The arms score different near-misses, so their rates are fitted on different
+    question populations — the same error the v2 -> v3 delta was recorded flat to
+    avoid ("different question populations, not a before/after on the same
+    questions"). When the sets differ, this prints the shared *count and ids* and
+    nothing else: no delta, no paired rate over the intersection. At two shared
+    items a single question moves a rate by 50 points, so a paired figure there
+    would be noise wearing a decimal point. The shared ids are printed so chunk 5
+    can compute one deliberately and label it; this report will not produce one
+    silently.
+    """
+    scored = {arm: frozenset(report.near_miss[arm].scored_ids) for arm in ARMS}
+    if len(set(scored.values())) == 1:
+        common = sorted(next(iter(scored.values())))
+        return [
+            f"cross-arm comparison: VALID — every arm scored the same {len(common)} "
+            f"item(s) ({', '.join(common) or 'none'}); the rate column is comparable "
+            "across rows."
+        ]
+
+    lines = [
+        "cross-arm comparison: NOT VALID — the arms scored different items, so the "
+        "rate column must NOT be read across rows. No delta is computed."
+    ]
+    for a, b in itertools.combinations(ARMS, 2):
+        shared = sorted(scored[a] & scored[b])
+        ids = f" ({', '.join(shared)})" if shared else ""
+        lines.append(f"  {a:<8} vs {b:<8} {len(shared)} shared{ids}")
+    return lines
 
 
 def _abstention_block(report: EvaluationReport) -> list[str]:
-    """Coverage sits next to the rate, in the same printed block, always.
+    """Coverage sits on the same row as the rate it produced, always.
 
     A rate whose coverage is only recoverable from logs is a rate that gets
     quoted without it — which is the exact failure DECISIONS.md 2026-08-20
-    Note 2 exists to prevent.
+    Note 2 exists to prevent. `scored-set` is the cross-*run* guard: two runs
+    (reranked and not) that scored different items show it on one line, which no
+    within-run check can catch because they are different processes.
     """
     n = report.n_unanswerable
-    unscored_ids = [qid for qid, ok in report.near_miss_retrieved.items() if not ok]
-    coverage = (
-        f"near-miss retrieval coverage: {report.n_scored}/{n} SCORED, {report.n_unscored} UNSCORED"
-    )
-    if unscored_ids:
-        coverage += f" ({', '.join(unscored_ids)})"
-
     lines = [
         f"abstention over the {n} NEAR-MISS entries — SCORED only when the near_miss_to "
-        f"span was in the set the abstention decision consumed "
-        f"(top_k={report.abstention_top_k}, arm=hybrid, reranker={report.reranker}); "
-        "never folded into recall or MRR:",
-        coverage,
+        f"span was in the set that arm's abstention decision consumed "
+        f"(top_k={report.abstention_top_k}, reranker={report.reranker}); never folded "
+        "into recall or MRR:",
+        f"{'arm':<10}{'coverage':<10}{'rate':<26}scored-set",
     ]
-    if report.n_unscored:
+    for arm in ARMS:
+        coverage = report.near_miss[arm]
         lines.append(
-            f"WARNING: {report.n_unscored} of {n} near-misses UNSCORED — any rate here "
-            f"is fitted on {report.n_scored} item(s), not {n}"
+            f"{arm:<10}{f'{coverage.n_scored}/{n}':<10}{_abstention_rate(coverage):<26}"
+            f"{','.join(coverage.scored_ids) or '(none)'}"
         )
-    lines.append(f"abstention rate: {_abstention_rate(report)}")
+
+    worst = max(report.near_miss[arm].n_unscored for arm in ARMS)
+    if worst:
+        lines.append(f"WARNING: no arm reaches {n}/{n} — every rate above is fitted on a subset.")
     lines.append("")
-    lines.append(f"  {'id':<5}{'span_retrieved':<16}{'outcome':<11}top-1 rrf_score")
+    lines.extend(_cross_arm_lines(report))
+    lines.append("")
+
+    header = "".join(f"{arm:<9}" for arm in ARMS)
+    lines.append(f"  {'id':<5}{header}hybrid top-1 rrf_score")
     for qid, score in report.abstention_scores.items():
-        retrieved = "yes" if report.near_miss_retrieved[qid] else "no"
-        outcome = report.near_miss_outcomes[qid] or "—"
-        lines.append(f"  {qid:<5}{retrieved:<16}{outcome:<11}{score:>10.5f}")
+        cells = "".join(
+            f"{'yes' if report.near_miss[arm].retrieved[qid] else 'no':<9}" for arm in ARMS
+        )
+        lines.append(f"  {qid:<5}{cells}{score:>13.5f}")
     return lines
 
 
@@ -613,72 +695,106 @@ def _demo() -> None:
     # to remove.
     assert near_miss_outcome(True, None) is None
 
-    # --- rate and coverage rendering ---
-    def _report(retrieved: dict[str, bool], outcomes: dict[str, str | None]) -> EvaluationReport:
+    # --- per-arm coverage, rate and cross-arm suppression rendering ---
+    def _report(per_arm: dict[str, dict[str, bool]], outcomes_wired: bool) -> EvaluationReport:
         empty = ArmMetrics(recall_at=dict.fromkeys(RECALL_KS, 0.0), mrr=0.0, n_questions=0)
+        near_miss = {
+            arm: NearMissCoverage(
+                arm=arm,
+                retrieved=retrieved,
+                outcomes={
+                    qid: near_miss_outcome(ok, ok if outcomes_wired else None)
+                    for qid, ok in retrieved.items()
+                },
+            )
+            for arm, retrieved in per_arm.items()
+        }
         return EvaluationReport(
             lexical=empty,
             vector=empty,
             hybrid=empty,
-            abstention_scores=dict.fromkeys(retrieved, 0.0),
+            abstention_scores=dict.fromkeys(per_arm["hybrid"], 0.0),
             rrf_k=RRF_K,
             candidate_k=DEFAULT_CANDIDATE_K,
             golden_set_path="-",
             golden_set_version=3,
             n_answerable=30,
-            n_unanswerable=len(retrieved),
+            n_unanswerable=len(per_arm["hybrid"]),
             reranker="NoOpReranker",
             mrr_depth=MRR_DEPTH,
             rerank_n=RERANK_N,
-            near_miss_retrieved=retrieved,
-            near_miss_outcomes=outcomes,
-            n_scored=sum(retrieved.values()),
-            n_unscored=sum(not ok for ok in retrieved.values()),
+            near_miss=near_miss,
             abstention_top_k=ABSTENTION_TOP_K,
         )
 
     ids = [f"u{i:02d}" for i in range(1, 7)]
 
+    def _set(scored: set[str]) -> dict[str, bool]:
+        return {qid: qid in scored for qid in ids}
+
+    # The measured no-rerank shape: lexical {u03,u04}, vector {u01,u03},
+    # hybrid {u01..u04}. Every pair differs, so no rate may be read across rows.
+    differing = _report(
+        {
+            "lexical": _set({"u03", "u04"}),
+            "vector": _set({"u01", "u03"}),
+            "hybrid": _set({"u01", "u02", "u03", "u04"}),
+        },
+        outcomes_wired=True,
+    )
+    block = "\n".join(_abstention_block(differing))
+    assert "cross-arm comparison: NOT VALID" in block, block
+    # lexical vs vector share exactly one item — the worst pair, and the reason
+    # a single collapsed coverage line was wrong.
+    assert "lexical  vs vector   1 shared (u03)" in block, block
+    # Two shared items renders the count and the ids and NOTHING else: no delta,
+    # no paired rate, no percentage over the intersection.
+    two_shared = next(ln for ln in block.splitlines() if ln.strip().startswith("vector   vs"))
+    assert two_shared == "  vector   vs hybrid   2 shared (u01, u03)", two_shared
+    assert "=" not in two_shared and "%" not in two_shared, two_shared
+    # Each arm's own rate keeps its own denominator, so two rows can never be
+    # subtracted by eye without the differing denominators being visible.
+    assert "lexical   2/6       2/2 = 1.000" in block, block
+    assert "hybrid    4/6       4/4 = 1.000" in block, block
+
+    # The negative control: equal sets (the measured +rerank shape) must NOT
+    # suppress, or the rule would just be "always refuse" and prove nothing.
+    same = _set({"u01", "u02", "u03", "u04", "u05"})
+    equal = _report({"lexical": same, "vector": dict(same), "hybrid": dict(same)}, True)
+    block = "\n".join(_abstention_block(equal))
+    assert "cross-arm comparison: VALID" in block, block
+    assert "the rate column is comparable across rows" in block, block
+    assert "shared" not in block, block
+
     # Zero coverage must never render a number: 0/0 shown as 0.000 reads as
     # "abstained on nothing" when the truth is "measured nothing".
-    none_retrieved = _report(dict.fromkeys(ids, False), dict.fromkeys(ids, UNSCORED))
-    block = "\n".join(_abstention_block(none_retrieved))
-    rate_line = next(ln for ln in block.splitlines() if ln.startswith("abstention rate:"))
-    assert rate_line == "abstention rate: n/a (0 scored of 6)", rate_line
-    # Scoped to the rate line, not the whole block: the score column legitimately
-    # contains 0.00000 here. It is the *rate* that must never render as a number.
-    assert "0.000" not in rate_line, rate_line
-    assert "coverage: 0/6 SCORED, 6 UNSCORED (u01, u02, u03, u04, u05, u06)" in block, block
-    assert "WARNING: 6 of 6 near-misses UNSCORED" in block, block
+    none_scored = _set(set())
+    empty_report = _report(
+        {"lexical": none_scored, "vector": dict(none_scored), "hybrid": dict(none_scored)}, True
+    )
+    block = "\n".join(_abstention_block(empty_report))
+    for line in block.splitlines():
+        if line.startswith(("lexical", "vector", "hybrid")):
+            assert "n/a (0 scored)" in line and "0.000" not in line, line
+    assert "0/6" in block and "(none)" in block, block
+    assert "WARNING: no arm reaches 6/6" in block, block
+    # All three scored nothing, so the sets are trivially equal — validity is a
+    # statement about the sets, not a claim that comparing zero items is useful.
+    assert "cross-arm comparison: VALID" in block, block
 
-    # Partial coverage with a decision wired: rate over SCORED only, and the
-    # coverage it was fitted on printed in the same block, not derivable
-    # elsewhere.
-    partial = dict(zip(ids, [True, True, True, True, False, False], strict=True))
-    outcomes: dict[str, str | None] = {
-        "u01": ABSTAINED,
-        "u02": ABSTAINED,
-        "u03": ABSTAINED,
-        "u04": ANSWERED,
-        "u05": UNSCORED,
-        "u06": UNSCORED,
-    }
-    block = "\n".join(_abstention_block(_report(partial, outcomes)))
-    assert "abstention rate: 3/4 = 0.750 over SCORED items (coverage 4/6)" in block, block
-    assert "coverage: 4/6 SCORED, 2 UNSCORED (u05, u06)" in block, block
-    # The two UNSCORED items must not sit in either half of the rate: 3/4, never
-    # 3/6 (which would dilute it) and never 5/6 (which would score them as pass).
-    assert "3/6" not in block and "5/6" not in block, block
-
-    # No decision wired — today's default. UNSCORED is still computed, because it
+    # No decision wired — today's default. UNSCORED still computes, because it
     # depends only on retrieval; the rate refuses.
-    unwired: dict[str, str | None] = {
-        **dict.fromkeys(ids[:4], None),
-        **dict.fromkeys(ids[4:], UNSCORED),
-    }
-    block = "\n".join(_abstention_block(_report(partial, unwired)))
-    assert "no abstention decision wired; 4 scored of 6" in block, block
-    assert "UNSCORED" in block, block
+    unwired = _report(
+        {
+            "lexical": _set({"u03", "u04"}),
+            "vector": _set({"u01", "u03"}),
+            "hybrid": _set({"u01", "u02", "u03", "u04"}),
+        },
+        outcomes_wired=False,
+    )
+    block = "\n".join(_abstention_block(unwired))
+    assert "n/a — no decision wired" in block, block
+    assert "4/6" in block, block  # coverage is still reported
 
     async def run_cache_check() -> None:
         from app.services.embeddings import FakeEmbedder
