@@ -443,9 +443,9 @@ async def _assert_noop_matches_pre_rerank_baseline(
                 arm=arm,
                 reranker=NOOP_RERANKER,
             )
-            assert all(
-                h.rerank_score is None and h.rerank_rank is None for h in result.hits
-            ), f"{qid}/{arm}: NoOp must not populate the rerank fields"
+            assert all(h.rerank_score is None and h.rerank_rank is None for h in result.hits), (
+                f"{qid}/{arm}: NoOp must not populate the rerank fields"
+            )
             assert result.rerank is not None and result.rerank.infer_ms == 0.0
             blocks.append(
                 f"### {qid} {arm} n={len(result.hits)}\n{_serialize_pre_rerank_fields(result.hits)}"

@@ -516,9 +516,9 @@ def _demo() -> None:
                     )
                 multi = [e for e in v2 if len(e.spans) > 1]
                 assert multi, "expected v2 to contain multi-span questions (q11-q13)"
-                assert all(
-                    len(resolved[e.id]) == 2 for e in multi
-                ), "multi-span must map to 2 chunks"
+                assert all(len(resolved[e.id]) == 2 for e in multi), (
+                    "multi-span must map to 2 chunks"
+                )
 
                 # --- v3 resolves end to end, and the split is structural ---
                 v3 = load_golden_set(GOLDEN_SET_PATH)
