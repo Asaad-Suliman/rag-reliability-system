@@ -14,6 +14,19 @@ dependencies = [
     "pypdf>=6.16.1",
     "python-docx>=1.2.0",
     "httpx>=0.28.1",
+    # Reranker (app/services/reranking.py). All three already arrived as
+    # transitive deps of chromadb; declared here because this app imports them
+    # directly, and a core component must not rely on another package's
+    # dependency graph continuing to include it.
+    #
+    # onnxruntime is pinned exactly, not floated. reranking.py's negative
+    # control asserts a property of ORT's *dynamic quantization* — that batch
+    # composition perturbs activation scales — and a runtime upgrade could
+    # change that behaviour, failing the assertion for reasons unrelated to
+    # this code. Bump deliberately, then re-run `python -m app.services.reranking`.
+    "onnxruntime==1.29.0",
+    "tokenizers>=0.20",
+    "numpy>=1.26",
 ]
 
 [dependency-groups]
@@ -39,3 +52,10 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 files = ["app"]
+
+# onnxruntime ships no py.typed marker. Scoped to that one module so `strict`
+# still covers everything else — reranking.py's own signatures stay checked,
+# only the third-party import is untyped.
+[[tool.mypy.overrides]]
+module = ["onnxruntime.*"]
+ignore_missing_imports = true
