@@ -61,6 +61,33 @@ class Settings(BaseSettings):
             return v.resolve()
         return (_REPO_ROOT / v).resolve()
 
+    # --- reranker ---
+    # "local" is the default implementation: when a reranker runs it is the
+    # local int8 ONNX cross-encoder, never a hosted API. The benchmark
+    # (`app.cli evaluate`) still defaults to "none" — its baseline arm is
+    # deliberately no-rerank, and chunk 5 turns it on per arm explicitly.
+    #
+    # Weights are baked into the image and verified at load. If they are missing
+    # or do not match the manifest, startup FAILS — it never falls back to
+    # "none". A reranker that silently is not there produces answers that look
+    # reranked and are not.
+    reranker: Literal["none", "local"] = "local"
+    reranker_model_dir: Path = Path("models/reranker")
+    reranker_manifest_path: Path = Path("scripts/reranker_model.sha256")
+    reranker_intra_op_threads: int = Field(default=4, ge=1)
+
+    @field_validator("reranker_model_dir", "reranker_manifest_path")
+    @classmethod
+    def _resolve_reranker_path(cls, v: Path) -> Path:
+        # Anchored to the repo root like `ingest_root`, not to the process CWD:
+        # `app.cli` and `uvicorn` get launched from different directories, and a
+        # relative default resolved against CWD would find the weights from one
+        # and fail from the other. An absolute override (a container mount)
+        # passes through untouched.
+        if v.is_absolute():
+            return v.resolve()
+        return (_REPO_ROOT / v).resolve()
+
     # --- llm provider (required) ---
     llm_api_key: SecretStr
     llm_model: str = "claude-sonnet-5"

@@ -32,7 +32,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import numpy as np
 import onnxruntime as ort
@@ -55,6 +55,11 @@ RERANK_N = 40
 # Because the executor below is max_workers=1, the total inference thread
 # budget is 1 x this — bounded, never multiplied across concurrent requests.
 DEFAULT_INTRA_OP_THREADS = 4
+
+# Which implementation `build_reranker` returns. "local" is the default
+# *implementation* of the protocol — when a reranker runs, it is this one, not a
+# hosted API. Whether one runs at all is the caller's choice.
+RerankerBackend = Literal["none", "local"]
 
 DEFAULT_MODEL_DIR = Path("models/reranker")
 DEFAULT_MANIFEST_PATH = Path("scripts/reranker_model.sha256")
@@ -262,6 +267,32 @@ class NoOpReranker:
 
 NOOP_RERANKER = NoOpReranker()
 """Module singleton. Stateless, so sharing it is free and safe."""
+
+
+def build_reranker(
+    backend: RerankerBackend,
+    model_dir: Path = DEFAULT_MODEL_DIR,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+    intra_op_threads: int = DEFAULT_INTRA_OP_THREADS,
+) -> Reranker:
+    """The one place a reranker is constructed.
+
+    Takes primitives rather than `Settings` so this module stays independent of
+    config, matching `retrieval.py` and `vector_store.py`. Both the HTTP app and
+    the CLI call this, so they cannot drift on how loading or failure works.
+
+    Raises `RerankerModelMissing` for `"local"` when the weights are absent or do
+    not match the manifest. It is deliberately not caught here: callers make it
+    fatal at startup rather than degrading to `"none"`, because a reranker that
+    silently is not there produces answers that look reranked and are not.
+    """
+    if backend == "none":
+        return NOOP_RERANKER
+    return LocalOnnxReranker(
+        model_dir=model_dir,
+        manifest_path=manifest_path,
+        intra_op_threads=intra_op_threads,
+    )
 
 
 class LocalOnnxReranker:
