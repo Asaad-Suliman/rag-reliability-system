@@ -36,6 +36,25 @@ GOLDEN_SET_PATH = Path("tests/fixtures/golden_set_v3.json")
 QUERY_EMBEDDINGS_CACHE_PATH = Path("tests/fixtures/query_embeddings.json")
 RECALL_KS = (5, 10, 30)
 
+# MRR is cut at a FIXED depth, independent of the caller's `top_k`.
+#
+# Before chunk 4 it was unbounded, which meant it silently equalled whatever
+# `top_k` the caller passed. That is not a comparable metric: raising the rerank
+# fan-out from 30 to 40 moved hybrid's MRR from 0.4504 to 0.4513 purely because
+# a13's gold chunk sits at rank 35 and became visible — retrieval order was
+# byte-identical. Chunk 5 compares four arms; if any two ran at different
+# `top_k`, their MRRs would differ for that reason alone and nothing in the
+# report would say so.
+#
+# 10 rather than 30 or 40: MRR weights rank 1 at 1.0 and rank 30 at 0.033, so
+# depth past ~10 contributes noise, not signal — and precision-at-1 is exactly
+# what the reranker exists to fix. The conventional reporting depth too.
+#
+# Changing this re-baselines the metric. It is a definition change, not drift:
+# the chunk 3 figures (vector 0.707, hybrid 0.450) were computed unbounded at
+# depth 30 and do not reproduce at 10 by construction.
+MRR_DEPTH = 10
+
 
 class GoldenSetError(RuntimeError):
     """A golden set could not be resolved against the live corpus.
@@ -206,14 +225,17 @@ def _rank_metrics(
     ranked_chunk_ids: list[str], gold_chunk_ids: set[str]
 ) -> tuple[dict[int, float], float]:
     """True recall (fraction of gold chunks retrieved), not hit-rate — q11-q13
-    each have two gold chunks and must be scored as such. MRR uses the first
-    gold chunk to appear in the ranking, 0.0 if none does.
+    each have two gold chunks and must be scored as such.
+
+    MRR uses the first gold chunk inside `MRR_DEPTH`, 0.0 if none appears there.
+    Cutting at a fixed depth is the whole point: see `MRR_DEPTH`.
     """
     recall_at = {
         k: len(set(ranked_chunk_ids[:k]) & gold_chunk_ids) / len(gold_chunk_ids) for k in RECALL_KS
     }
     first_hit_rank = next(
-        (i + 1 for i, cid in enumerate(ranked_chunk_ids) if cid in gold_chunk_ids), None
+        (i + 1 for i, cid in enumerate(ranked_chunk_ids[:MRR_DEPTH]) if cid in gold_chunk_ids),
+        None,
     )
     mrr = 1.0 / first_hit_rank if first_hit_rank else 0.0
     return recall_at, mrr
@@ -240,6 +262,14 @@ class EvaluationReport:
     # questions than it scored. recall/MRR are answerable-only by construction.
     n_answerable: int
     n_unanswerable: int
+    # Which reranker produced this run, and how deep MRR was cut. Every run
+    # today is NoOpReranker, so both are currently constant — they exist for
+    # chunk 5, which runs four arms. A benchmark row that does not name its
+    # reranker cannot be told apart from one that does, and the whole point of
+    # chunk 5 is comparing reranked against not.
+    reranker: str
+    mrr_depth: int
+    rerank_n: int
 
 
 async def evaluate(
@@ -341,6 +371,9 @@ async def evaluate(
         golden_set_version=version,
         n_answerable=len(answerable),
         n_unanswerable=len(unanswerable),
+        reranker=type(reranker).__name__,
+        mrr_depth=MRR_DEPTH,
+        rerank_n=rerank_n,
     )
 
 
@@ -348,10 +381,14 @@ def format_report(report: EvaluationReport) -> str:
     lines = [
         f"golden set: {report.golden_set_path} (v{report.golden_set_version}) — "
         f"{report.n_answerable} answerable, {report.n_unanswerable} unanswerable",
-        f"rrf_k={report.rrf_k} candidate_k={report.candidate_k}",
+        f"rrf_k={report.rrf_k} candidate_k={report.candidate_k} "
+        f"rerank_n={report.rerank_n} reranker={report.reranker}",
         "",
-        f"recall@k and MRR over the {report.n_answerable} ANSWERABLE entries only:",
-        f"{'arm':<10} {'n':>3}  " + "  ".join(f"recall@{k:<3}" for k in RECALL_KS) + "     mrr",
+        f"recall@k and MRR@{report.mrr_depth} over the {report.n_answerable} "
+        "ANSWERABLE entries only:",
+        f"{'arm':<10} {'n':>3}  "
+        + "  ".join(f"recall@{k:<3}" for k in RECALL_KS)
+        + f"  mrr@{report.mrr_depth}",
     ]
     arms = (("lexical", report.lexical), ("vector", report.vector), ("hybrid", report.hybrid))
     for name, metrics in arms:
@@ -393,6 +430,21 @@ def _demo() -> None:
     # rather than adapting to it.
     assert recall_at == dict.fromkeys(RECALL_KS, 1.0), recall_at
     assert mrr == 1 / 2, mrr  # first gold chunk (chk_a) at rank 2
+
+    # --- MRR is cut at MRR_DEPTH, recall is not ---
+    # A gold chunk just inside the cut counts; one just outside scores 0.0 for
+    # MRR while still counting toward recall@30. This is the property that makes
+    # MRR comparable across arms with different top_k — without it, deepening
+    # the list silently raises MRR (chunk 4: hybrid 0.4504 -> 0.4513 from a13 at
+    # rank 35 alone, with retrieval order byte-identical).
+    filler = [f"chk_f{i}" for i in range(40)]
+    inside = filler[: MRR_DEPTH - 1] + ["chk_a"] + filler[MRR_DEPTH - 1 :]
+    outside = filler[:MRR_DEPTH] + ["chk_a"] + filler[MRR_DEPTH:]
+    r_in, mrr_in = _rank_metrics(inside, gold)
+    r_out, mrr_out = _rank_metrics(outside, gold)
+    assert mrr_in == 1 / MRR_DEPTH, mrr_in  # gold at exactly MRR_DEPTH still counts
+    assert mrr_out == 0.0, mrr_out  # one rank past the cut is invisible to MRR
+    assert r_in[30] == r_out[30] == 0.5, (r_in, r_out)  # recall sees it either way
 
     recall_at2, mrr2 = _rank_metrics(["chk_x", "chk_y"], gold)
     assert recall_at2[5] == 0.0 and mrr2 == 0.0, (recall_at2, mrr2)  # neither gold chunk retrieved
