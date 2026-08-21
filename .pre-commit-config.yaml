@@ -1,8 +1,15 @@
 # Install once per clone:  uv run pre-commit install
 # Run against everything:  uv run pre-commit run --all-files
 repos:
+  # Keep `rev` equal to the ruff version in the project venv (pyproject's dev
+  # group, see `uv run ruff --version`). This hook fetches its own copy of ruff,
+  # so the two drift independently — and a formatter that disagrees with the
+  # local one is worse than no hook: each run reverts the other's output, and
+  # the check stops being the check you think it is. v0.8.6 vs the venv's
+  # 0.16.3 disagreed on assert-message wrapping and cost two rejected commits.
+  # Bump both together, never one alone.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+    rev: v0.16.3
     hooks:
       - id: ruff
         args: [--fix]
