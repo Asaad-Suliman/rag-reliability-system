@@ -10,7 +10,8 @@ that produced it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from sqlalchemy import select, text
@@ -19,6 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Document
 from app.services.embeddings import Embedder
 from app.services.ingestion import collection_name_for
+from app.services.reranking import (
+    NOOP_RERANKER,
+    RERANK_N,
+    Reranker,
+    RerankTiming,
+)
 from app.services.vector_store import VectorStore
 
 # Tuned against the golden set, not the SIGIR-2009/Elasticsearch default of 60.
@@ -104,6 +111,33 @@ class RetrievedChunk:
     lexical_score: float | None
     vector_rank: int | None
     vector_distance: float | None
+
+    # Alongside `rrf_score`, never replacing it: `rrf_score` is still live
+    # provenance (cli.py prints it, evaluation.py's abstention column *is* the
+    # top-1 rrf_score), so overwriting it would break comparability with the
+    # chunk 3 baseline. Both None when no reranker ran, which makes "was this
+    # reranked?" answerable from the object alone rather than from context.
+    # `rerank_score` is the raw cross-encoder logit — see RerankResult.scores.
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
+
+
+@dataclass(frozen=True)
+class Retrieval:
+    """`hits` plus what reranking cost, if it ran.
+
+    A wrapper rather than a bare list because Step 04 has to fill the API
+    Contract's `timings_ms.rerank`, and the alternative — recording the last
+    call's timing on the reranker itself — is a concurrency bug waiting to
+    happen: the reranker is a process-wide singleton, so two in-flight requests
+    would overwrite each other's numbers.
+
+    `rerank` is None when the reranker did no work (`NoOpReranker`, or an empty
+    candidate set).
+    """
+
+    hits: list[RetrievedChunk]
+    rerank: RerankTiming | None = None
 
 
 async def lexical_search(
@@ -221,16 +255,27 @@ async def retrieve(
     query_vector: list[float] | None = None,
     arm: Literal["hybrid", "lexical", "vector"] = "hybrid",
     rrf_k: int = RRF_K,
-) -> list[RetrievedChunk]:
-    """Fused hybrid retrieval. Both arms fetch `candidate_k` so RRF has depth
-    to fuse before truncating to `top_k`. `query_vector` passes through to
-    `vector_search` — see its docstring.
+    reranker: Reranker = NOOP_RERANKER,
+    rerank_n: int = RERANK_N,
+) -> Retrieval:
+    """Fused hybrid retrieval, then reranking. Both arms fetch `candidate_k` so
+    RRF has depth to fuse; fusion is cut to `rerank_n`, reranked, then cut to
+    `top_k`. `query_vector` passes through to `vector_search` — see its
+    docstring.
 
     `arm` restricts which retriever(s) actually run: `"lexical"` skips
     `vector_search` entirely — no embedding call, genuinely $0 — and
     `"vector"` skips `lexical_search`. `"hybrid"` (default) runs both and
     fuses, unchanged from before this parameter existed. `rrf_k` passes
     through to `_rrf_fuse` — see its docstring.
+
+    `reranker` defaults to `NOOP_RERANKER`, which is load-bearing rather than
+    merely convenient: with it, this function's output is **byte-identical** to
+    the pre-reranker implementation, which is what makes chunk 5's no-rerank
+    arm a genuine baseline instead of a second code path. `_demo()` asserts
+    that against a digest captured from commit `5db0925`, before this parameter
+    existed. `RerankError` is deliberately *not* caught here — see its
+    docstring for why the policy belongs at each boundary instead.
     """
     lexical_hits = (
         await lexical_search(session, query, candidate_k, document_ids)
@@ -252,16 +297,25 @@ async def retrieve(
     for vhit in vector_hits:
         by_id.setdefault(vhit.chunk_id, vhit)
 
-    ranked_ids = sorted(fused, key=lambda cid: fused[cid][0], reverse=True)[:top_k]
+    # Cut to the rerank pool, not to `top_k` — the reranker has to see N
+    # candidates to reorder among them. `max(..., top_k)` so a caller who asks
+    # for more results than the pool can never get a silently short list.
+    #
+    # ponytail: with NoOpReranker this builds N objects and then discards all
+    # but top_k. Deliberate — branching on "is there a reranker" would create
+    # the second code path chunk 5 must not have. The waste is bounded (one
+    # wider IN, a few dozen dataclasses) and invisible next to the Chroma query.
+    pool_size = max(rerank_n, top_k)
+    ranked_ids = sorted(fused, key=lambda cid: fused[cid][0], reverse=True)[:pool_size]
     if not ranked_ids:
-        return []
+        return Retrieval(hits=[])
 
     doc_ids = {by_id[cid].document_id for cid in ranked_ids}
     stmt = select(Document.id, Document.filename).where(Document.id.in_(doc_ids))
     rows = (await session.execute(stmt)).all()
     filenames = {row.id: row.filename for row in rows}
 
-    results: list[RetrievedChunk] = []
+    candidates: list[RetrievedChunk] = []
     for cid in ranked_ids:
         matched_hit = by_id[cid]
         rrf_score, lex_rank, lex_score, vec_rank, vec_distance = fused[cid]
@@ -272,7 +326,7 @@ async def retrieve(
             # shouldn't happen given ChromaVectorStore always stores it, but
             # fail loudly rather than emit a hit the Verifier can't score.
             raise RuntimeError(f"chunk {cid} has no text from either retrieval arm")
-        results.append(
+        candidates.append(
             RetrievedChunk(
                 chunk_id=cid,
                 document_id=matched_hit.document_id,
@@ -288,7 +342,122 @@ async def retrieve(
                 vector_distance=vec_distance,
             )
         )
-    return results
+
+    reranked = await reranker.rerank(query, candidates, top_k)
+    by_chunk = {c.chunk_id: c for c in candidates}
+    hits: list[RetrievedChunk] = []
+    for rank, cid in enumerate(reranked.order, start=1):
+        candidate = by_chunk[cid]
+        score = reranked.scores.get(cid)
+        # No score means nothing reranked this hit, so both fields stay None and
+        # the candidate object is passed through untouched — not even copied.
+        # That is what makes the NoOp path byte-identical rather than merely
+        # equivalent.
+        hits.append(
+            candidate if score is None else replace(candidate, rerank_score=score, rerank_rank=rank)
+        )
+    return Retrieval(hits=hits, rerank=reranked.timing)
+
+
+# --- the chunk 5 guarantee ---------------------------------------------------
+# The no-rerank benchmark arm is only a real baseline if it is the *same* code
+# path as the reranked one. These pin that: the digest below was captured from
+# the pre-reranker implementation, so it is ground truth this code did not
+# produce — the same discipline chunk 2 used when it cross-checked v3's
+# offset-resolved gold ids against v2's independently recorded chunk_ids.
+
+_PRE_RERANK_COMMIT = "5db0925"
+_BASELINE_QIDS = ("a01", "a05", "a09", "a13", "a17", "a21", "a25", "u01")
+
+# sha256 over every pre-rerank field of every hit, for the 8 questions above in
+# both arms at top_k=40/candidate_k=30 — 560 hits, 103,368 bytes. Captured
+# 2026-08-21 against commit 5db0925, where retrieval.py had no reranker in it at
+# all, and confirmed stable across three consecutive runs.
+#
+# If this fails, the wiring changed retrieval behaviour and chunk 5's no-rerank
+# arm is no longer comparable to the chunk 3 baseline. It is not a snapshot to
+# re-bless: regenerate it only by checking out 5db0925 and re-capturing.
+_PRE_RERANK_DIGEST = "3ffa60b311338301483eadcda96d76a0ab66836916bc84e12ec42ceac89cfa3a"
+
+
+def _serialize_pre_rerank_fields(hits: list[RetrievedChunk]) -> str:
+    """Every field `RetrievedChunk` had before the reranker existed.
+
+    `rerank_score`/`rerank_rank` are excluded on purpose — they did not exist
+    at 5db0925, so including them could not match. That they stay None on this
+    path is asserted separately, which together means: everything that existed
+    is unchanged, and everything new is provably inert.
+    """
+    return "\n".join(
+        "|".join(
+            (
+                h.chunk_id,
+                h.document_id,
+                h.document_name,
+                repr(h.page),
+                repr(h.char_start),
+                repr(h.char_end),
+                repr(len(h.text)),
+                hashlib.sha256(h.text.encode()).hexdigest()[:16],
+                repr(h.rrf_score),  # repr() round-trips a float exactly
+                repr(h.lexical_rank),
+                repr(h.lexical_score),
+                repr(h.vector_rank),
+                repr(h.vector_distance),
+            )
+        )
+        for h in hits
+    )
+
+
+async def _assert_noop_matches_pre_rerank_baseline(
+    session: AsyncSession, vector_store: VectorStore
+) -> None:
+    from app.core.config import get_settings
+    from app.services.embeddings import VoyageEmbedder
+    from app.services.evaluation import GOLDEN_SET_PATH, load_golden_set, load_query_vectors
+
+    settings = get_settings()
+    embedder = VoyageEmbedder(
+        api_key=settings.voyage_api_key.get_secret_value(),
+        model=settings.voyage_model,
+        dimensions=settings.voyage_dimensions,
+    )
+    by_id = {e.id: e for e in load_golden_set(GOLDEN_SET_PATH)}
+    # allow_network defaults to False: a cache miss raises rather than spends.
+    vectors = await load_query_vectors(
+        {qid: by_id[qid].question for qid in _BASELINE_QIDS}, embedder
+    )
+
+    blocks: list[str] = []
+    for qid in _BASELINE_QIDS:
+        for arm in ("vector", "hybrid"):
+            result = await retrieve(
+                by_id[qid].question,
+                session,
+                vector_store,
+                embedder,
+                top_k=40,
+                candidate_k=30,
+                query_vector=vectors[qid],
+                arm=arm,
+                reranker=NOOP_RERANKER,
+            )
+            assert all(
+                h.rerank_score is None and h.rerank_rank is None for h in result.hits
+            ), f"{qid}/{arm}: NoOp must not populate the rerank fields"
+            assert result.rerank is not None and result.rerank.infer_ms == 0.0
+            blocks.append(
+                f"### {qid} {arm} n={len(result.hits)}\n{_serialize_pre_rerank_fields(result.hits)}"
+            )
+
+    digest = hashlib.sha256("\n".join(blocks).encode()).hexdigest()
+    assert digest == _PRE_RERANK_DIGEST, (
+        f"NoOp retrieval diverged from pre-rerank commit {_PRE_RERANK_COMMIT}.\n"
+        f"  expected {_PRE_RERANK_DIGEST}\n  actual   {digest}\n"
+        "The wiring changed retrieval behaviour. Chunk 5's no-rerank arm is no "
+        "longer a baseline until this is explained."
+    )
 
 
 def _demo() -> None:
@@ -336,7 +505,7 @@ def _demo() -> None:
         vector_store = ChromaVectorStore(settings.chroma_persist_dir)
 
         async with session_factory() as session:
-            hits = await retrieve(
+            result = await retrieve(
                 "What does the glossary say about Cross-Encoder rerankers?",
                 session,
                 vector_store,
@@ -344,11 +513,14 @@ def _demo() -> None:
                 top_k=5,
                 candidate_k=20,
             )
+            hits = result.hits
             assert hits, "expected at least one hit against the real corpus"
+            assert len(hits) == 5, f"top_k must still cut to 5, got {len(hits)}"
             for h in hits:
                 assert h.document_id and h.page > 0
                 assert h.char_end > h.char_start
                 assert h.lexical_rank is not None or h.vector_rank is not None
+                assert h.rerank_score is None and h.rerank_rank is None
 
             # Offset round-trip: text must be an exact slice of the stored chunk row.
             row = (
@@ -358,11 +530,17 @@ def _demo() -> None:
             ).scalar_one()
             assert row == hits[0].text
 
+            await _assert_noop_matches_pre_rerank_baseline(session, vector_store)
+
         vector_store.close()
         await engine.dispose()
 
     asyncio.run(run_live())
-    print("ok: RRF math, dedupe-by-id, determinism, and a live hybrid retrieve() all verified")
+    print(
+        "ok: RRF math, dedupe-by-id, determinism, a live hybrid retrieve(), and the NoOp "
+        f"path byte-identical to pre-rerank commit {_PRE_RERANK_COMMIT} across "
+        f"{len(_BASELINE_QIDS)} questions x 2 arms"
+    )
 
 
 if __name__ == "__main__":

@@ -171,7 +171,7 @@ async def _cmd_query(
     if args.arm in ("vector", "hybrid"):
         print(f"embedding query via {embedder.model}...", file=sys.stderr)
 
-    hits = await retrieve(
+    result = await retrieve(
         text_query,
         session,
         vector_store,
@@ -182,6 +182,7 @@ async def _cmd_query(
         arm=args.arm,
         rrf_k=args.rrf_k,
     )
+    hits = result.hits
 
     if not hits:
         print("no results")
