@@ -21,8 +21,9 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.config import Settings, SettingsError, get_settings
@@ -178,6 +179,82 @@ async def _cmd_ingest(
     return EXIT_PIPELINE_FAILED if document.status in TERMINAL_FAILURE_STATUSES else EXIT_OK
 
 
+async def _probe_stores(
+    session: AsyncSession, vector_store: VectorStore, collection_name: str
+) -> tuple[bool, bool]:
+    """Presence of each store's data, not counts. Runs ONLY on the no-hits path.
+
+    Both stores are probed even though a single arm reads only one of them,
+    because the *message* needs both: a `--arm vector` run against an empty
+    collection reads identically whether nothing was ever ingested or
+    VOYAGE_MODEL changed, and those need opposite advice. The verdict still
+    depends only on the store the arm actually read — see `_no_hits_message`.
+
+    EXISTS rather than count(*): the decision is boolean, so there is no reason
+    to make Postgres walk the table, and nothing prints a total.
+    """
+    chunks_present = bool(
+        (await session.execute(text("SELECT EXISTS (SELECT 1 FROM chunks)"))).scalar()
+    )
+    vectors_present = await vector_store.count(collection_name) > 0
+    return chunks_present, vectors_present
+
+
+def _no_hits_message(
+    arm: Literal["hybrid", "lexical", "vector"],
+    chunks_present: bool,
+    vectors_present: bool,
+    collection_name: str,
+    filtered: bool,
+) -> tuple[str, bool]:
+    """Pure. Returns (message, is_refusal) for a query that returned no hits.
+
+    An empty corpus and a query nothing matched are different facts and must
+    never render as the same line — that was the defect this replaces.
+
+    Which store's emptiness counts is decided by the arm, because the arms read
+    different stores: lexical reads Postgres and never touches Chroma, vector is
+    the mirror. Reporting Chroma's state on a lexical run would be reporting
+    something that run never depended on.
+
+    Hybrid with exactly one store populated is a third case, not a variant of
+    empty: the query silently ran on one arm. That is a degraded result rather
+    than a trustworthy "no match", so it refuses — this codebase fails loudly
+    instead of degrading quietly.
+    """
+    reads_postgres = arm in ("hybrid", "lexical")
+    reads_chroma = arm in ("hybrid", "vector")
+    store_missing = (reads_postgres and not chunks_present) or (
+        reads_chroma and not vectors_present
+    )
+
+    if not store_missing:
+        note = " (a --document-id filter was applied)" if filtered else ""
+        return f"no results — the corpus is not empty; no chunk matched this query{note}", False
+
+    if not chunks_present and not vectors_present:
+        return (
+            "corpus is empty: nothing has been ingested. Run:\n"
+            "  uv run python -m app.cli ingest <file> --allow-network",
+            True,
+        )
+
+    if chunks_present and not vectors_present:
+        return (
+            f"postgres has chunks but the Chroma collection {collection_name} is empty. "
+            "Most likely VOYAGE_MODEL or VOYAGE_DIMENSIONS changed — collections are per "
+            "model and dimensions, so the corpus needs re-embedding under the new one. "
+            "Otherwise an interrupted delete or reindex; run `app.cli stats`.",
+            True,
+        )
+
+    return (
+        f"the Chroma collection {collection_name} has vectors but postgres has no chunks — "
+        "an interrupted ingest left vectors without their rows. Run `app.cli stats`.",
+        True,
+    )
+
+
 async def _cmd_query(
     args: argparse.Namespace, settings: Settings, session: AsyncSession, vector_store: VectorStore
 ) -> int:
@@ -218,7 +295,26 @@ async def _cmd_query(
         )
 
     if not hits:
-        print("no results")
+        # The probe runs here and nowhere else: on the happy path the command
+        # needs no counts, and paying for them on every query to explain a
+        # branch that rarely fires would be the wrong trade.
+        chunks_present, vectors_present = await _probe_stores(
+            session, vector_store, collection_name_for(embedder)
+        )
+        message, refused = _no_hits_message(
+            args.arm,
+            chunks_present,
+            vectors_present,
+            collection_name_for(embedder),
+            filtered=args.document_ids is not None,
+        )
+        if refused:
+            # RuntimeError, so main()'s existing handler reports it as `refused:`
+            # with exit 4 and no traceback — the same path RerankerModelMissing
+            # and the ingest network gate already take. An empty corpus is a
+            # missing prerequisite, which is exactly what exit 4 documents.
+            raise RuntimeError(message)
+        print(message)
         return EXIT_OK
 
     for i, hit in enumerate(hits, start=1):
@@ -494,15 +590,85 @@ def main(argv: list[str] | None = None) -> int:
         print(f"unavailable: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
     except RuntimeError as exc:
-        # Covers NetworkNotAllowedError (ingest_document's one raise path)
-        # and evaluate()'s cache-miss RuntimeError — both are the same
-        # category, a refused paid call, and both already carry a clear
+        # Covers NetworkNotAllowedError (ingest_document's one raise path),
+        # evaluate()'s cache-miss RuntimeError, RerankerModelMissing, and
+        # _cmd_query's empty-corpus refusal — all the same category, a missing
+        # prerequisite or a refused paid call, and all already carry a clear
         # message naming what to do next.
         print(f"refused: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+
+
+def _demo() -> None:
+    """Offline truth table for the no-hits branch. No Postgres, no Chroma.
+
+    Not reachable via `python -m app.cli` — that entry point is the CLI itself
+    and requires a subcommand. Run it as:
+
+        uv run python -c "from app.cli import _demo; _demo()"
+    """
+    collection = "chunks_voyage4lite_1024"
+    arms: tuple[Literal["hybrid", "lexical", "vector"], ...] = ("hybrid", "lexical", "vector")
+
+    def check(
+        arm: Literal["hybrid", "lexical", "vector"], chunks: bool, vectors: bool
+    ) -> tuple[str, bool]:
+        return _no_hits_message(arm, chunks, vectors, collection, filtered=False)
+
+    # --- both stores populated: a real no-match on every arm, never a refusal ---
+    for arm in arms:
+        message, refused = check(arm, True, True)
+        assert not refused, (arm, message)
+        assert message.startswith("no results — the corpus is not empty"), message
+
+    # --- both stores empty: an empty corpus on every arm, always a refusal ---
+    for arm in arms:
+        message, refused = check(arm, False, False)
+        assert refused, (arm, message)
+        assert message.startswith("corpus is empty"), message
+        # It must name the way out, not merely the problem.
+        assert "app.cli ingest" in message, message
+
+    # --- half-states: the arm decides whether the missing store matters ---
+    # Postgres populated, Chroma empty.
+    message, refused = check("lexical", True, False)
+    assert not refused, message  # lexical never reads Chroma
+    message, refused = check("vector", True, False)
+    assert refused and collection in message, message
+    assert "VOYAGE_MODEL" in message, message  # the likely cause, not "corpus is empty"
+    message, refused = check("hybrid", True, False)
+    assert refused and "VOYAGE_MODEL" in message, message
+
+    # Chroma populated, Postgres empty — the mirror, and a different message.
+    message, refused = check("vector", False, True)
+    assert not refused, message  # vector never reads Postgres
+    message, refused = check("lexical", False, True)
+    assert refused and "interrupted ingest" in message, message
+    message, refused = check("hybrid", False, True)
+    assert refused and "interrupted ingest" in message, message
+
+    # A half-state must never be described as an empty corpus: that would send
+    # someone to re-ingest a corpus that is already there.
+    for chunks, vectors in ((True, False), (False, True)):
+        message, _ = check("hybrid", chunks, vectors)
+        assert not message.startswith("corpus is empty"), message
+
+    # --- the --document-id clause rides on the no-match line only ---
+    plain, _ = _no_hits_message("hybrid", True, True, collection, filtered=False)
+    filtered, _ = _no_hits_message("hybrid", True, True, collection, filtered=True)
+    assert "--document-id" not in plain, plain
+    assert "--document-id" in filtered, filtered
+    # It must not leak into a refusal, where it would not be the cause.
+    empty, refused = _no_hits_message("hybrid", False, False, collection, filtered=True)
+    assert refused and "--document-id" not in empty, empty
+
+    print(
+        "ok: no-hits truth table — 3 arms x {populated, empty, both half-states}, "
+        "the --document-id clause, and no half-state reported as an empty corpus"
+    )
 
 
 if __name__ == "__main__":
