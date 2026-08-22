@@ -215,13 +215,29 @@ curl -i localhost:8000/api/v1/health/ready    # readiness, 503 when a dependency
 Every response carries an `X-Request-ID` header, and the same id appears in every
 JSON log line for that request.
 
-## Known limitations
+### When a query returns nothing
 
-**A query against an empty corpus succeeds silently.** If no document has been
-ingested, `query` prints `no results` and exits 0. There is no indication that the
-corpus is empty rather than the question being unanswerable, and the two cases are
-indistinguishable from the output. This is a defect, not intended behaviour: the
-command should report that the corpus contains no documents. A fix is planned.
+Three different things can produce no hits, and they are reported differently.
+
+A query that matched nothing on a populated corpus is a legitimate answer and
+exits 0: `no results — the corpus is not empty; no chunk matched this query`. If a
+`--document-id` filter was applied, the message says so, since that is the usual
+reason an otherwise good query comes back empty.
+
+An empty corpus exits 4 and names the fix. Nothing has been ingested, so the
+question was never really asked — a missing prerequisite, which is what exit 4
+already means here.
+
+The two stores can also be empty independently, and that is reported as its own
+case rather than as an empty corpus. Which one matters depends on the arm:
+`--arm lexical` reads only Postgres and `--arm vector` reads only Chroma, so a
+store the arm never touched is never reported. A Chroma collection that is empty
+while Postgres holds chunks usually means `VOYAGE_MODEL` or `VOYAGE_DIMENSIONS`
+changed — collections are named per model and dimensions, so the corpus needs
+re-embedding under the new one — and the message says that rather than claiming
+the corpus is empty.
+
+## Known limitations
 
 **Reranking degrades the strongest retrieval arm.** See Measured results. This is
 an open finding, not a resolved one.
