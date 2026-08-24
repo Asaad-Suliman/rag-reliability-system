@@ -23,6 +23,8 @@ all three are inert at this configuration. The v2 arm tests that claim empirical
 
 Abstention also reproduces: q09 `0.24359`, q10 `0.29167` against the recorded 0.244 / 0.292.
 
+(The MRR column here is the same unbounded pre-`MRR_DEPTH` key flagged in §1 below.)
+
 **Exact reproduction on all eleven figures.** Two things follow. The three changed files are
 behaviourally inert at this configuration, as inspection claimed. And the new offset-based gold
 resolution produces gold sets identical to v2's stored `chunk_ids` — already proven directly in
@@ -39,6 +41,22 @@ This run cost $0: no `--allow-network`, so a cache miss would have raised rather
 | lexical-only | 0.233 | 0.400 | 0.152 |
 | vector-only | **0.833** | **0.900** | **0.707** |
 | hybrid (RRF k=5) | 0.667 | 0.867 | 0.450 |
+
+> **⚠ The MRR column above is a DIFFERENT KEY from `mrr@10`. Do not build a gate from it.**
+>
+> These three figures (0.707 / 0.450 / 0.152) are the **unbounded** MRR this harness computed
+> before `MRR_DEPTH` existed — it silently equalled whatever `top_k` the caller passed, which
+> here was 30. Chunk 4 replaced it with MRR cut at a fixed depth of 10
+> (`app/services/evaluation.py`, `MRR_DEPTH`); that was a **definition change, not drift**, and
+> these numbers do not reproduce at depth 10 by construction.
+>
+> The live key is **`mrr@10`**, and its recorded no-rerank values are **0.700 (vector) / 0.445
+> (hybrid) / 0.142 (lexical)** — frozen in `evaluation.GATE_FIGURES` and asserted for exact
+> equality by `scripts/chunk5_benchmark.py`. **A gate written from the column above fails on all
+> three arms**, and would be read as corpus drift when nothing had drifted.
+>
+> The recall columns are unaffected — `RECALL_KS` did not change. Only MRR was re-based.
+> This note exists so nobody writes a gate from this column again.
 
 Same run, same questions — hybrid minus vector-only:
 

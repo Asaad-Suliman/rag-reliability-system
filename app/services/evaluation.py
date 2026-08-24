@@ -352,6 +352,82 @@ class EvaluationReport:
     abstention_top_k: int
 
 
+# --- the chunk 5 regression gate ---------------------------------------------
+#
+# The twelve figures `evaluate()` produces with `NoOpReranker`, exactly as
+# `format_report` prints them. Recorded 2026-08-20 by the chunk 3 re-baseline and
+# re-measured unchanged 2026-08-22.
+#
+# Compared as the harness's own 3-decimal strings, never as floats: lexical's
+# recall@5 is 7/30 = 0.2333..., so an equality test against 0.233 as a float can
+# never pass and a tolerance would defeat the point. String comparison is exact
+# equality on the emitted figure.
+#
+# NB the fourth figure is mrr@10. `docs/BASELINE-v3-chunk3.md` §1 records MRR as
+# 0.707/0.450/0.152 — the unbounded metric from before `MRR_DEPTH` existed (see
+# MRR_DEPTH above). Those numbers are a different key and must not be gated on.
+#
+# A mismatch is evidence that the corpus or the index moved under the benchmark,
+# NOT a threshold to re-bless. The corpus is do-not-re-embed and unrebuildable —
+# the source PDF is gone and canonical text was never persisted — so a moved
+# figure means the one irreplaceable input changed. Explain it before this dict
+# is touched.
+GATE_FIGURES: dict[str, tuple[str, str, str, str]] = {
+    "lexical": ("0.233", "0.400", "0.567", "0.142"),
+    "vector": ("0.833", "0.900", "1.000", "0.700"),
+    "hybrid": ("0.667", "0.867", "0.967", "0.445"),
+}
+
+
+class GateMismatch(RuntimeError):
+    """The no-rerank figures moved. See `GATE_FIGURES` for what that means."""
+
+
+def arm_tuple(metrics: ArmMetrics) -> tuple[str, ...]:
+    """One arm's figures in the harness's own order and precision:
+    `(recall@5, recall@10, recall@30, mrr@10)`, each formatted `.3f`.
+
+    The single place the 4-tuple is read off `ArmMetrics`. The gate and chunk 5's
+    results file both go through it, so neither can compare or record a tuple in
+    an order or precision `format_report` does not print.
+    """
+    return tuple(f"{metrics.recall_at[k]:.3f}" for k in RECALL_KS) + (f"{metrics.mrr:.3f}",)
+
+
+def assert_gate(report: EvaluationReport) -> None:
+    """Exact equality against `GATE_FIGURES`, or raise naming every arm that moved.
+
+    Refuses a reranked report outright rather than failing it. The recorded
+    figures are NoOp figures; run against `--reranker local` they would fail on
+    arms that are simply a different measurement, and "the gate failed" would
+    then carry no information at all.
+    """
+    if report.reranker != "NoOpReranker":
+        raise GateMismatch(
+            f"the gate is defined on the no-rerank run; this report was produced by "
+            f"{report.reranker}. Re-run with reranker=NOOP_RERANKER."
+        )
+
+    observed = {
+        "lexical": arm_tuple(report.lexical),
+        "vector": arm_tuple(report.vector),
+        "hybrid": arm_tuple(report.hybrid),
+    }
+    failures = [
+        f"  {arm:<8} expected {'  '.join(GATE_FIGURES[arm])}\n"
+        f"  {'':<8} observed {'  '.join(observed[arm])}"
+        for arm in ARMS
+        if observed[arm] != GATE_FIGURES[arm]
+    ]
+    if failures:
+        raise GateMismatch(
+            "no-rerank figures moved — (recall@5, recall@10, recall@30, mrr@10):\n"
+            + "\n".join(failures)
+            + "\nThe benchmark corpus is do-not-re-embed and unrebuildable, so this is "
+            "evidence of corpus or index drift. Explain it; do not re-bless GATE_FIGURES."
+        )
+
+
 async def evaluate(
     session: AsyncSession,
     vector_store: VectorStore,
@@ -796,6 +872,56 @@ def _demo() -> None:
     assert "n/a — no decision wired" in block, block
     assert "4/6" in block, block  # coverage is still reported
 
+    # --- the chunk 5 regression gate ---
+    from dataclasses import replace
+
+    def _arm(figures: tuple[str, str, str, str]) -> ArmMetrics:
+        recalls = [float(f) for f in figures[:3]]
+        return ArmMetrics(
+            recall_at=dict(zip(RECALL_KS, recalls, strict=True)),
+            mrr=float(figures[3]),
+            n_questions=30,
+        )
+
+    # The reason the gate compares strings: these are the true fractions behind
+    # lexical's recorded row, and none of them equals its 3-decimal figure as a
+    # float. A float gate on 0.233 could never pass; this one does.
+    raw_lexical = ArmMetrics(
+        recall_at={5: 7 / 30, 10: 12 / 30, 30: 17 / 30}, mrr=0.14166, n_questions=30
+    )
+    assert arm_tuple(raw_lexical) == GATE_FIGURES["lexical"], arm_tuple(raw_lexical)
+    assert raw_lexical.recall_at[5] != 0.233, "the float comparison this gate avoids"
+
+    base = _report({arm: _set(set()) for arm in ARMS}, outcomes_wired=False)
+    passing = replace(
+        base,
+        lexical=_arm(GATE_FIGURES["lexical"]),
+        vector=_arm(GATE_FIGURES["vector"]),
+        hybrid=_arm(GATE_FIGURES["hybrid"]),
+    )
+    assert_gate(passing)  # must not raise
+
+    # One arm moved by one thousandth: the gate has to fail, and has to name
+    # which arm and both tuples.
+    moved = replace(passing, hybrid=_arm(("0.667", "0.867", "0.967", "0.446")))
+    try:
+        assert_gate(moved)
+    except GateMismatch as exc:
+        assert "hybrid" in str(exc), exc
+        assert "0.445" in str(exc) and "0.446" in str(exc), exc
+        assert "lexical" not in str(exc) and "vector" not in str(exc), exc
+    else:
+        raise AssertionError("the gate accepted a moved figure")
+
+    # A reranked report is refused, not failed: the recorded figures are NoOp
+    # figures, so failing it would report drift that did not happen.
+    try:
+        assert_gate(replace(passing, reranker="LocalOnnxReranker"))
+    except GateMismatch as exc:
+        assert "no-rerank run" in str(exc), exc
+    else:
+        raise AssertionError("the gate accepted a reranked report")
+
     async def run_cache_check() -> None:
         from app.services.embeddings import FakeEmbedder
 
@@ -899,8 +1025,9 @@ def _demo() -> None:
     asyncio.run(run_resolver_check())
     print(
         "ok: recall@k/MRR math, the near-miss outcome truth table and its coverage/rate "
-        "rendering, and the cache round-trip offline; gold resolution reproduces all 13 of "
-        "v2's recorded chunk_id sets, v3 resolves 30+6, and 5 broken spans all raise"
+        "rendering, the chunk 5 gate (passes exact, fails on one thousandth, refuses a "
+        "reranked report), and the cache round-trip offline; gold resolution reproduces "
+        "all 13 of v2's recorded chunk_id sets, v3 resolves 30+6, and 5 broken spans all raise"
     )
 
 
