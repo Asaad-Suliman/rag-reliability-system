@@ -67,7 +67,7 @@ from app.services.evaluation import (
     evaluate,
     load_golden_set,
     load_query_vectors,
-    resolve_gold_chunk_ids,
+    resolve_target_chunk_ids,
 )
 from app.services.ingestion import collection_name_for, sha256_file
 from app.services.reranking import NOOP_RERANKER, RERANK_N, Reranker
@@ -398,7 +398,7 @@ async def main() -> int:
             print("evidence — pre-rerank candidate pools...", file=sys.stderr)
             entries = load_golden_set(GOLDEN_SET_PATH)
             near_misses = [e for e in entries if not e.answerable]
-            gold_by_id = await resolve_gold_chunk_ids(session, entries)
+            target_by_id = await resolve_target_chunk_ids(session, entries)
             vectors = await load_query_vectors({e.id: e.question for e in entries}, embedder)
 
             overlap: dict[str, Any] = {}
@@ -428,7 +428,7 @@ async def main() -> int:
                 reranker,
                 u05.question,
                 vectors[u05.id],
-                gold_by_id[u05.id],  # u05's near_miss_to chunk: its LURE
+                target_by_id[u05.id],  # u05's near_miss_to chunk: its LURE
                 pools_by_id[u05.id],
             )
 
