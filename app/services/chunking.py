@@ -151,6 +151,12 @@ def chunk_document(
                     char_start=abs_start,
                     char_end=abs_end,
                     text=text,
+                    # An embedding-sizing estimate against a 32k context with a
+                    # 64x margin -- adequate for that, and NOT a budget counter.
+                    # Measured against the vendored reference tokenizer it
+                    # under-counts on 3 of this corpus's 260 chunks, so wiring it
+                    # into a token budget would silently overrun the context.
+                    # Use `context_budget.TokenCounter` there.
                     token_estimate=max(1, len(text) // 4),
                 )
             )

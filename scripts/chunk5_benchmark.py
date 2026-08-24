@@ -50,6 +50,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cli import _build_embedder, _build_reranker
 from app.core.config import get_settings
 from app.db.session import create_engine, create_session_factory
+from app.services.context_budget import (
+    ContextBudget,
+    HeuristicCharCounter,
+    budget_manifest,
+)
 from app.services.embeddings import Embedder
 from app.services.evaluation import (
     ARMS,
@@ -194,6 +199,11 @@ async def _manifest(
             "sha256": sha256_file(golden_path),
         },
         "embedder": {"model": embedder.model, "dimensions": embedder.dimensions},
+        # The active counter's identity and all five reserve values, beside the
+        # corpus id and the weights revision: a budgeted run has to be
+        # reconstructible from the manifest alone, and two runs sharing a corpus
+        # and a reranker but not a counter are not comparable.
+        "budget": budget_manifest(ContextBudget(), HeuristicCharCounter()),
         "reranker": {
             "pass_1_gate": "none",
             "pass_2_answerable": {
