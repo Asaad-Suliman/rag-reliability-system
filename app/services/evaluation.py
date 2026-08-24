@@ -145,7 +145,7 @@ class GoldenEntry:
     `spans` are (char_start, char_end) pairs into the document's canonical text.
     Gold chunk ids are *not* stored here and never read from the fixture — they
     are resolved from these spans at evaluation time (see
-    `resolve_gold_chunk_ids`). v2 recorded `chunk_ids` directly, which are
+    `resolve_target_chunk_ids`). v2 recorded `chunk_ids` directly, which are
     `chk_` ULIDs minted fresh on every ingest, so a single reindex silently
     zeroed the gold set while the metrics kept reporting numbers.
     """
@@ -191,7 +191,7 @@ def load_golden_set(path: Path) -> list[GoldenEntry]:
     raise GoldenSetError(f"{path}: unsupported golden set version {version!r}")
 
 
-async def resolve_gold_chunk_ids(
+async def resolve_target_chunk_ids(
     session: AsyncSession, entries: list[GoldenEntry]
 ) -> dict[str, set[str]]:
     """Map each entry id to the chunk ids its spans fall inside.
@@ -464,7 +464,7 @@ async def evaluate(
     # unanswerable entries must never enter recall or MRR.
     answerable = [e for e in entries if e.answerable]
     unanswerable = [e for e in entries if not e.answerable]
-    gold_by_id = await resolve_gold_chunk_ids(session, entries)
+    target_by_id = await resolve_target_chunk_ids(session, entries)
 
     questions_by_id = {e.id: e.question for e in entries}
     vectors = await load_query_vectors(
@@ -510,7 +510,7 @@ async def evaluate(
 
     for q in answerable:
         query = q.question
-        gold = gold_by_id[q.id]
+        gold = target_by_id[q.id]
         query_vector = vectors[q.id]
 
         lexical_scores.append(_rank_metrics(await arm_hits(query, query_vector, "lexical"), gold))
@@ -558,7 +558,7 @@ async def evaluate(
                 abstention_scores[q.id] = hits[0].rrf_score if hits else 0.0
 
             # "Retrieved" is the answerable path's rule, unchanged and not
-            # re-derived: `resolve_gold_chunk_ids` already mapped this entry's
+            # re-derived: `resolve_target_chunk_ids` already mapped this entry's
             # `near_miss_to` span to its owning chunk by containment (it runs
             # over every entry, not just the answerable ones), and the test is
             # chunk-id membership — the same `set(...) & gold` form
@@ -569,7 +569,7 @@ async def evaluate(
             # retrieve() built and cut away, and never another arm's hits:
             # scoring against a set the decision never saw would credit the
             # abstention to evidence it never had.
-            ok = bool({h.chunk_id for h in hits} & gold_by_id[q.id])
+            ok = bool({h.chunk_id for h in hits} & target_by_id[q.id])
             retrieved[q.id] = ok
             outcomes[q.id] = near_miss_outcome(
                 ok, None if abstained_by is None else abstained_by(abstention)
@@ -977,7 +977,7 @@ def _demo() -> None:
                     for q in v2_raw["questions"]
                 }
                 v2 = load_golden_set(v2_path)
-                resolved = await resolve_gold_chunk_ids(session, v2)
+                resolved = await resolve_target_chunk_ids(session, v2)
                 for entry in v2:
                     assert resolved[entry.id] == recorded[entry.id], (
                         f"{entry.id}: resolved {resolved[entry.id]} != recorded "
@@ -993,7 +993,7 @@ def _demo() -> None:
                 v3 = load_golden_set(GOLDEN_SET_PATH)
                 assert sum(e.answerable for e in v3) == 30, "expected 30 answerable"
                 assert sum(not e.answerable for e in v3) == 6, "expected 6 near-miss"
-                r3 = await resolve_gold_chunk_ids(session, v3)
+                r3 = await resolve_target_chunk_ids(session, v3)
                 assert all(r3[e.id] for e in v3 if e.answerable), "every answerable must resolve"
 
                 # --- negative controls: each must raise, none may pass ---
@@ -1014,7 +1014,7 @@ def _demo() -> None:
                 ]
                 for label, entry in broken:
                     try:
-                        await resolve_gold_chunk_ids(session, [entry])
+                        await resolve_target_chunk_ids(session, [entry])
                     except GoldenSetError:
                         pass
                     else:
