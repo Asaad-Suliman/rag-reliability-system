@@ -13,7 +13,202 @@ Newest entries first.
 
 ---
 
+## 2026-08-25 — RAG Reliability System Step 03 Chunk 7 Phase E: `HeuristicCharCounter` demoted, `TiktokenCounter` is now the budget-safety mechanism
+
+**Decision:** `app/services/context_budget.py` gains `TiktokenCounter` (exact tiktoken `cl100k_base`
+counts, times `CROSS_TOKENIZER_SAFETY_FACTOR = 1.2`) and makes it `plan_context`'s default counter.
+`HeuristicCharCounter` stays available — nothing deleted — but is no longer what makes the budget
+safe. This closes out the investigation the 2026-08-24 correction (above) opened: that entry
+retracted the `PER_CHUNK_OVERHEAD_TOKENS = 96` measurement claim and reported the heuristic's
+tiktoken-measured margin; Phase C characterised _why_ it under-counts; Phase D sized how bad the
+real floor is; this entry is where the fix actually lands.
+
+**Why `HeuristicCharCounter` had to be demoted, restated in one place.** Three independent
+measurements, escalating:
+
+| stage                               | reference            | min margin  | what it means                                                                       |
+| ----------------------------------- | -------------------- | ----------- | ----------------------------------------------------------------------------------- |
+| original claim (2026-08-24 chunk 6) | WordPiece            | 1.0524x     | never under-counts — the _only_ property ever proven                                |
+| Phase B re-measurement              | tiktoken cl100k_base | **0.9722x** | under-counts on 4 of 260 real corpus chunks                                         |
+| Phase D synthetic probe             | tiktoken cl100k_base | **0.6257x** | a hand-built mixed block (glued numerics + short lines) undercounts by over a third |
+
+The corpus's observed floor (0.9722x) is the edge of a real cluster, not an isolated outlier (Phase
+D: four chunks under 1.0, a fifth at exactly 1.0000, then a slow climb — no gap). The synthetic
+floor (0.6257x) shows the corpus itself understates the risk: it doesn't happen to contain a chunk
+that's _purely_ identifier-dense the way a model-comparison table or package list would be.
+
+**The two named mechanisms (Phase C), both confirmed to generalize (Phase D):**
+
+1. **Punctuation-glued numeric compounds** — numbers stuck directly to `$`, `%`, `,`, or `-` with no
+   space (`$0.50`, `500,000-token`, `95-99%`, `all-MiniLM-L6-v2`). cl100k_base's BPE fragments these
+   into many short tokens (`all-MiniLM-L6-v2` → 10 tokens for 16 chars) that the heuristic's flat
+   3.5-chars/token rate doesn't charge for. Corpus-wide: chunks with 10+ such tokens (14 of 260)
+   average margin 1.1633 vs ~1.38 corpus median — near-misses that don't cross 1.0 still cluster low,
+   confirming the mechanism is real, not coincidence.
+2. **Short newline-delimited list/TOC layout** — many short lines (page numbers, section titles),
+   each newline and each 2-3 digit number costing a full BPE token regardless of length. Corpus-wide:
+   chunks that are >60% short lines (9 of 260) average margin 1.0945. This mechanism explains the
+   single _worst_ offender (margin 0.9722, zero glued-numeric tokens) — the two mechanisms are
+   genuinely distinct, not one feature wearing two names; forcing them into one category would have
+   been tidying up the finding.
+
+**Known gaps — content types never probed, stated as gaps rather than assumed safe.** The corpus is
+one RAG/vector-DB book; the synthetic probes were hand-built to mimic patterns already in it, just
+denser. None of the following were tested and could sit lower than 0.6257x: **code blocks, URLs,
+citation/reference lists, CJK-adjacent text**, heavily abbreviated scientific notation, or markdown
+tables with many narrow columns. `TiktokenCounter` does not need this gap closed to be safe (it
+counts the real text, whatever it contains) — the gap matters only for anyone tempted to reach for
+`HeuristicCharCounter` again outside prose.
+
+**`CROSS_TOKENIZER_SAFETY_FACTOR = 1.2` — what it covers and what it explicitly does not.** It
+covers cross-tokenizer drift **among BPE-family models only**: cl100k_base is a proxy for whichever
+tokenizer the eventual generation model actually uses (unpinned until Chunk 7+ settles it), and
+different BPE vocabularies can count the same text differently even when both are "real"
+tokenizers. It does **not** cover structural fragmentation — that risk is already retired by using a
+real tokenizer's real count on the real text, not by a multiplier. **Provisional**: 1.2x is a round,
+unmeasured margin, chosen because there is nothing to measure the drift against until the
+generation model is pinned. Revisit then, not before.
+
+**Where it's applied.** Inside `TiktokenCounter.count()` itself (`ceil(raw_tiktoken_count * 1.2)`),
+not as a separate step inside `plan_context`'s cost loop. This was a deliberate scope decision: an
+earlier draft applied the factor uniformly to whichever counter ran, but that would have required
+recalculating every hardcoded fixture in `_check_offline` (which exercises `HeuristicCharCounter`
+explicitly, calibrated to the un-inflated numbers) for no benefit — `HeuristicCharCounter` isn't the
+safety mechanism the factor is protecting anymore, so inflating its output too would only have
+changed unrelated, already-passing self-check numbers without covering any real risk.
+`counter.name` for `TiktokenCounter` includes the factor in its string
+(`tiktoken-cl100k_base-v1+1.2x-cross-tokenizer`) so the manifest stays honest about what actually
+ran.
+
+**Cache resolution is now internal to `TiktokenCounter`, not left to a caller-set env var — a real
+defect Phase E verification found and fixed.** Proven under genuine network-namespace isolation
+(`unshare -rn`, confirmed with a control `curl` that network really was blocked): with
+`TIKTOKEN_CACHE_DIR` set correctly, `tiktoken.get_encoding("cl100k_base")` loads from cache with
+zero connection attempts. **Without it set, the same call attempts a real HTTPS connection and fails
+loudly under isolation** — the exact defect flagged as a risk in Phase A/B, now confirmed and fixed:
+`TiktokenCounter.__init__` sets `TIKTOKEN_CACHE_DIR` itself and additionally blocks
+`socket.getaddrinfo`/`socket.socket.connect` for the duration of the load, so any future caller who
+forgets to set the env var gets a named `TiktokenCacheMissing` instead of a silent network fetch —
+the guarantee no longer depends on remembering to set anything.
+
+**`usable_budget` is unchanged — 193,488 — and saying otherwise would be wrong.** It is pure reserve
+arithmetic (`context_window - prompt_scaffold_reserve - query_reserve - answer_reserve`), independent
+of which counter runs; no counter change can move it. What actually changed, re-derived and reported
+here: the corpus's worst-case single-hit cost. Under the retired `HeuristicCharCounter`, 675 tokens.
+Under `TiktokenCounter` (the real mechanism now), **584 tokens** — lower, not higher, because the
+corpus's single _longest_ chunk (1999 chars, `CORPUS_MAX_CHUNK_CHARS`) happens to be ordinary prose,
+not one of the fragmentation-prone short/dense chunks Phase C/D found (the worst _fragmentation_
+offender is 365 chars, nowhere near the longest). Both fit `usable_budget=193,488` with enormous
+headroom (192,904 tokens) — the budget was never close to binding at default reserves, before or
+after this change; this is insurance, not a fix for an active problem (same framing as the original
+chunk 6 entry's "does not bind at default reserves" note).
+
+**`plan_context`'s "no default, ever" stance, deliberately reversed, not quietly dropped.** The
+original reasoning (chunk 6) was that any implicit default was equally untrustworthy among options
+with no clear winner. That is no longer true: `TiktokenCounter` is the validated mechanism, and
+`counter_name`/`budget_manifest` still always record which counter ran, so a default cannot silently
+go untracked — the concern the original stance was protecting against is still satisfied, just by a
+different mechanism (recording, not refusing).
+
+**Verified before implementing, not assumed:** re-ran `_check_offline` (unchanged, `HeuristicCharCounter`
+fixtures unaffected by scoping the safety factor inside `TiktokenCounter`), the live corpus check
+(new: `TiktokenCounter` worst-case-hit assertion, passing), `ruff` and `mypy --strict` clean, the
+12-figure regression gate (PASS, all 12 exact), and `_PRE_RERANK_DIGEST` (byte-identical to
+`5db0925`) — none of this touches retrieval or evaluation code paths, confirmed rather than assumed.
+
+**The blocking prerequisite for chunk 7's provenance renderer (`ProvenanceHeaderUnmeasured`,
+added in the 2026-08-24 correction) still fires**, unaffected by this change — confirmed by running
+`uv run python -m app.services.context_budget`: every check above passes and prints, then the module
+still exits 1 on the unbuilt-renderer check, as designed.
+
+---
+
+## 2026-08-24 (correction) — RAG Reliability System: chunk 6's PER_CHUNK_OVERHEAD_TOKENS=96 measurement claim RETRACTED; heuristic counter margin re-measured against tiktoken cl100k_base and DOES NOT hold
+
+**This corrects two specific claims in the 2026-08-24 chunk 6 entry below, produced by chunk 7
+Phase A/B (`scripts/fetch_tiktoken_cache.py`, `scripts/validate_token_counter.py`). Nothing else in
+that entry is affected — whole-chunk selection, the five-reserve design, `score_source`, the
+tie-break, and the exclusion accounting all stand as recorded.**
+
+**Claim 1 RETRACTED — "the 96 is MEASURED, not asserted."** It was not. Phase A audited where the
+five header-format figures (23/40/49/69/74 reference tokens) actually live: a comment in
+`context_budget.py` and a table in the chunk 6 entry below, both prose, neither backed by a script.
+Worse, the table itself only gives a literal string template for 2 of the 5 rows
+(`[filename | page N | chars a-b]` and `[doc_id=... page=... chars=a-b]`); "markdown block",
+"XML-ish `<source ...>`", and "JSON line" are named, not spelled out. And the renderer the whole
+figure is supposedly measured against **does not exist** — that entry itself calls it "chunk 7's
+renderer" in the future tense. A number described as measured, where the artifact being measured
+was never built and 3 of 5 inputs were never written down, is not a measurement.
+
+**`PER_CHUNK_OVERHEAD_TOKENS = 96` is reclassified: UNVALIDATED ESTIMATE, not a measured figure.**
+The value is unchanged — nothing in this correction says 96 is wrong, only that the claim it was
+_measured_ is false. It stays in force as a working estimate until it can be measured for real. See
+the blocking prerequisite below.
+
+**Claim 2 CORRECTED — "min margin 1.0524x."** That figure is real but was measured against the
+vendored WordPiece tokenizer, and this entry's own text already flagged it as non-universal on
+ID-dense text. `scripts/validate_token_counter.py` re-measures the same property against **tiktoken
+cl100k_base** — a same-family BPE tokenizer, chosen as a **PROXY** reference because the generation
+model is still unpinned (chunk 7+), not because it is the tokenizer that will actually bill this
+system. Measured 2026-08-24, all 260 live corpus chunks:
+
+**min margin 0.9722x, median 1.3820x, 4 of 260 chunks under-counted.**
+
+**This is the finding, reported without reconciling it against 1.0524x, per the instruction that
+produced this correction.** The heuristic's "never under-count" property (Decision A in the entry
+below) does **NOT** hold against tiktoken cl100k_base. It only ever held against WordPiece. Worst
+three offenders, all "table of contents"-style text — short numeric fragments packed into an
+otherwise-prose chunk:
+
+| margin  | chunk                            | heuristic | reference | excerpt                                                                                                                    |
+| ------- | -------------------------------- | --------- | --------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 0.9722x | `chk_01M0D4BMG6AASVJBVVD32X3B4S` | 105       | 108       | "Contents 245 05 03 Glossary About The Author Preface 06 27 61 106 151 176 208 Chapter 01: Is RAG Dead? Chapter 02: How t" |
+| 0.9829x | `chk_01M0D4BMGWR72JGSFZ9V1XCQ6F` | 345       | 351       | "Chapter 05 How to Select a Vector Database Table 5.2 compares index structures across key dimensions: Index Type Recall " |
+| 0.9901x | `chk_01M0D4BMGRY2JMWDR5MX7ER72H` | 201       | 203       | "Chapter 04 How to Select an Embedding Model Early embedding models limited inputs to 512 tokens, and this forced long d"  |
+
+**The prose/ID-dense split, defined for the first time by this measurement, MISSED the failure
+mode.** Chunk 6 recorded no operational rule for "ID- and number-dense text," only prose describing
+it. `validate_token_counter.py` introduces one — a chunk counts as ID-dense when more than 15% of
+its characters are digits — and flags it explicitly as newly introduced, not inherited. Under that
+rule, **0 of 260 chunks classify as ID-dense, and all 4 under-counting chunks classify as prose.**
+The rule as stated does not isolate the actual failure mode (short numeric runs embedded in
+longer prose, not digit-dominated text) — recorded honestly rather than tuned after the fact to
+produce a cleaner split.
+
+**Consequence: this changes the guardrail work.** `CHARS_PER_TOKEN = 3.5` in `context_budget.py`
+was chosen because it sat below the WordPiece floor (3.675) with margin. It does not sit below the
+tiktoken floor implied by this run. Before chunk 7's Guardrail can trust `ChunkExceedsBudget`'s
+invariant against a BPE-family generation model, either `CHARS_PER_TOKEN` must be lowered and
+re-validated against tiktoken, or `HeuristicCharCounter` must be replaced by a tiktoken-backed
+counter for that regime — not decided here, only surfaced.
+
+**Reproducible now, where it was not before.** `scripts/fetch_tiktoken_cache.py` pins and caches
+tiktoken's cl100k_base BPE file (content-addressed, checksum-verified, `models/tiktoken/` gitignored
+same as `models/reranker/`). `scripts/validate_token_counter.py` re-runs the margin measurement
+above and, once chunk 7's renderer exists, the header-format one (`--skip-headers` was passed this
+run precisely because that renderer still does not exist — see the blocking prerequisite in
+`app/services/context_budget.py`, `ProvenanceHeaderUnmeasured`).
+
+**Incident, corrected in-flight and left on record rather than smoothed over:**
+`scripts/fetch_tiktoken_cache.py`'s `EXPECTED_SHA256`, written from memory during Phase A because
+Phase A could not import tiktoken to read it, had 8 hex digits wrong. The download-then-verify path
+caught it on the first real run: refused to cache the mismatched bytes, deleted the `.part` file,
+exited nonzero. Corrected against the installed `tiktoken==0.8.0` package's own source before the
+cache was written. The failure mode worked exactly as designed — loud, not silent.
+
+---
+
 ## 2026-08-24 — RAG Reliability System Step 03 Chunk 6: context budgeter — tokens not characters, whole chunks only, and Decision B is FIVE reserves not four
+
+> **Two claims in this entry are corrected — see "2026-08-24 (correction)" directly above.**
+> (1) "The 96 is MEASURED, not asserted" is RETRACTED; `PER_CHUNK_OVERHEAD_TOKENS = 96` is now an
+> UNVALIDATED ESTIMATE, not a measured figure — no renderer existed to measure it, and 3 of the 5
+> header formats below never had a literal template on record. (2) "min margin 1.0524x" was
+> measured only against WordPiece; measured against tiktoken cl100k_base (a proxy for the still-
+> unpinned generation model) the min margin is 0.9722x and 4 of 260 chunks under-count — the
+> "never under-count" property does NOT hold universally. Everything else below — whole-chunk
+> selection, the five-reserve design, `score_source`, the tie-break, the exclusion accounting — is
+> unaffected and unchanged. Annotation only; the entry below is otherwise unchanged.
 
 **Decision:** `app/services/context_budget.py` packs reranked hits into a token budget and records
 what it dropped. `plan_context(hits, budget, counter, order)` selects **whole chunks only**, greedy
@@ -48,7 +243,7 @@ verified against `scripts/reranker_model.sha256` — no network, no new dep, `$0
 
 **Two honest limits on that property, both recorded rather than smoothed over.** (1) WordPiece is
 **not the generation model's tokenizer**, which stays unpinned until chunk 7+. It is the
-*pessimistic* reference for English prose — WordPiece fragments harder than BPE — so it bounds the
+_pessimistic_ reference for English prose — WordPiece fragments harder than BPE — so it bounds the
 error on this corpus, but it is not proof against BPE in general. **When the tiktoken-backed counter
 arrives, `_check_never_undercounts` MUST be re-run against it.** (2) The margin holds on **prose**,
 not universally: ID- and number-dense text fragments far harder — a JSON provenance header measured
@@ -65,12 +260,12 @@ into a budget and silently overrun the context.
 **Decision B is now FIVE reserves, not four — this deviates from B as originally specified, and is
 recorded as a deviation rather than quietly absorbed.** The original four:
 
-| value | default | reasoning |
-| --- | --- | --- |
-| `CONTEXT_WINDOW` | 200_000 | claude-sonnet-5, matching `Settings.llm_model`'s default. If that default moves this must move with it — a budget sized for a window the model does not have looks correct and is not. |
-| `PROMPT_SCAFFOLD_RESERVE` | 2_000 | system prompt, citation-format instructions, inter-chunk delimiters — the *fixed* scaffold, independent of how many chunks are selected. |
-| `QUERY_RESERVE` | 512 | a ceiling on the question, not a measurement of one. Golden-set questions run 40-160 characters; 512 tokens is ~1,800 characters, an order of magnitude of headroom. |
-| `ANSWER_RESERVE` | 4_000 | a truncated answer is a wrong answer, and the failure is invisible to the Verifier — it scores what was produced, not what was cut off. |
+| value                     | default | reasoning                                                                                                                                                                              |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONTEXT_WINDOW`          | 200_000 | claude-sonnet-5, matching `Settings.llm_model`'s default. If that default moves this must move with it — a budget sized for a window the model does not have looks correct and is not. |
+| `PROMPT_SCAFFOLD_RESERVE` | 2_000   | system prompt, citation-format instructions, inter-chunk delimiters — the _fixed_ scaffold, independent of how many chunks are selected.                                               |
+| `QUERY_RESERVE`           | 512     | a ceiling on the question, not a measurement of one. Golden-set questions run 40-160 characters; 512 tokens is ~1,800 characters, an order of magnitude of headroom.                   |
+| `ANSWER_RESERVE`          | 4_000   | a truncated answer is a wrong answer, and the failure is invisible to the Verifier — it scores what was produced, not what was cut off.                                                |
 
 The fifth, **`PER_CHUNK_OVERHEAD_TOKENS = 96`**, is the provenance header chunk 7's renderer will
 emit per included chunk so the model can cite. Without it the assembled prompt exceeds the budget by
@@ -81,13 +276,13 @@ and be wrong the moment `top_k` changed.
 **The 96 is MEASURED, not asserted.** Five plausible header formats rendered at this corpus's widest
 real values (page 247, `char_end` 271256, a 33-character filename, a 30-character ULID chunk id):
 
-| format | heuristic | reference |
-| --- | --- | --- |
-| `[filename \| page N \| chars a-b]` | 20 | 23 |
-| `[doc_id=... page=... chars=a-b]` | 20 | 40 |
-| markdown block | 37 | 49 |
-| XML-ish `<source ...>` | 43 | 69 |
-| JSON line | 44 | **74** |
+| format                              | heuristic | reference |
+| ----------------------------------- | --------- | --------- |
+| `[filename \| page N \| chars a-b]` | 20        | 23        |
+| `[doc_id=... page=... chars=a-b]`   | 20        | 40        |
+| markdown block                      | 37        | 49        |
+| XML-ish `<source ...>`              | 43        | 69        |
+| JSON line                           | 44        | **74**    |
 
 96 sits above the observed reference maximum of 74, with room for a format chunk 7 has not chosen.
 Sized against the **reference** tokenizer deliberately — the heuristic scored those same headers at
@@ -96,7 +291,7 @@ Sized against the **reference** tokenizer deliberately — the heuristic scored 
 **Decision C's invariant tightens accordingly.** A single hit violates the budget when
 `chunk_tokens + per_chunk_overhead_tokens > usable_budget`, not `chunk_tokens` alone. It raises
 `ChunkExceedsBudget` naming the chunk, its true cost, the text/overhead split, all four component
-values, the counter, and the fix. Never a silent drop: whole-chunk inclusion means there *is* no
+values, the counter, and the fix. Never a silent drop: whole-chunk inclusion means there _is_ no
 correct way to fit an oversized chunk, because truncating it would break the `char_start`/`char_end`
 spans chunk 9's Verifier scores against — the Verifier would validate groundedness against evidence
 the model never saw. That is a correctness constraint, not a preference. Asserted early against the
@@ -115,7 +310,7 @@ a reranked `Retrieval` would have made the budgeter unusable in exactly the conf
 benchmark runs in. So the selection key falls back to `rrf_score`, and which one was used travels on
 the result. **It must be uniform across a single `Retrieval`**: a mixed set raises
 `MixedScoreSources`, because a raw cross-encoder logit (unbounded, ~±10) and an RRF artifact
-(~0.01-0.03) on one sort key would silently rank by *score source* rather than by relevance,
+(~0.01-0.03) on one sort key would silently rank by _score source_ rather than by relevance,
 putting every reranked hit above every un-reranked one regardless of merit. Homogeneity is what
 makes the fallback sound; this is not a general comparator across score types.
 
@@ -138,7 +333,7 @@ unmeasured and there is no harness to evaluate them until generation exists.
 
 **A reachability finding, surfaced by the tests rather than by design.** `included` empty with
 `excluded` non-empty is **unreachable**, and that is a guarantee, not an oversight: decision C makes
-an unfittable single hit an *error*, so every hit fits alone, so the greedy loop always includes at
+an unfittable single hit an _error_, so every hit fits alone, so the greedy loop always includes at
 least the top-ranked one. The Guardrail therefore reads "something relevant was budgeted out" off
 **`excluded` being non-empty**, never off `included` being empty — and it can rely on the best hit
 never having been the one dropped. The docstring's table was corrected to say so; the original
@@ -170,7 +365,7 @@ in this repo self-checks this way, and installing pytest is an approval gate. Ru
 `uv run python -m app.services.context_budget`. Ten checks: the never-under-count property over the
 live corpus, the corpus-max invariant, `ChunkExceedsBudget` with a message that names the numbers,
 byte-identical determinism across repeat runs, tie-break stability under input reversal, whole-chunk
-object identity (`included` elements are the *same objects* passed in — not copies, not truncated),
+object identity (`included` elements are the _same objects_ passed in — not copies, not truncated),
 the empty/non-empty exclusion distinction, `MixedScoreSources`, `ImpossibleBudget`, and the manifest
 block round-tripping through JSON.
 
@@ -180,6 +375,7 @@ lexical `0.233 0.400 0.567 0.142`, vector `0.833 0.900 1.000 0.700`, hybrid
 clean across 44 files. Nothing was committed or pushed.
 
 **NEW CHUNK 7 PREREQUISITES — logged here, listed in SCRATCHPAD, links both ways.**
+
 1. **The renderer's actual provenance-header format must fit within `PER_CHUNK_OVERHEAD_TOKENS`
    (96), and chunk 7 must ASSERT that it does** — the budget charges for it whether or not it is
    true. Sits alongside the existing `resolve_gold_chunk_ids` / `gold_by_id` -> `target_chunk_ids`
@@ -188,7 +384,7 @@ clean across 44 files. Nothing was committed or pushed.
 2. **Re-run `_check_never_undercounts` against the tiktoken-backed counter** once the generation
    model is pinned.
 3. **Consider promoting the five constants to `Settings`** once the real context window is known.
-   Recorded so the module-constant choice is *revisited* rather than inherited by default.
+   Recorded so the module-constant choice is _revisited_ rather than inherited by default.
 4. **The Guardrail must branch on `score_source`** and refuse to calibrate abstention thresholds on
    `"rrf"` — see the 2026-08-19 entry on RRF's structural inability to signal absence.
 
@@ -199,8 +395,8 @@ clean across 44 files. Nothing was committed or pushed.
 **Status: LOGGED, not fixed. Golden set v3 stays FROZEN.** No fixture was edited and none may be
 edited to act on this. Review it when the near-miss set is next revised.
 
-**The limitation.** u06 asks: *"What is the per-document price of the technique that prepends a
-generated summary before embedding?"* v3 designates the **p95 agentic-chunking pricing chunk**
+**The limitation.** u06 asks: _"What is the per-document price of the technique that prepends a
+generated summary before embedding?"_ v3 designates the **p95 agentic-chunking pricing chunk**
 (`chk_01M0D4BMGPC4TSS179JBQE32HB`) as its `near_miss_to` lure. But retrieval consistently ranks
 the **p90 chunk describing the technique the question names** (`chk_01M0D4BMGPTW90AQ81EM4R32VW` —
 "prepend this context to the chunk before embedding") **above it, in every arm that pools the
@@ -208,11 +404,11 @@ designated lure at all.**
 
 **Observed ranks of the designated lure, measured 2026-08-23 (read-only, $0):**
 
-| arm | pre-rerank | post-rerank |
-| --- | --- | --- |
-| lexical | **not in pool** | — |
-| vector | 2 | **6** |
-| hybrid | 8 | **6** |
+| arm     | pre-rerank      | post-rerank |
+| ------- | --------------- | ----------- |
+| lexical | **not in pool** | —           |
+| vector  | 2               | **6**       |
+| hybrid  | 8               | **6**       |
 
 Meanwhile the p90 technique chunk is at **rank 1 in all three arms**.
 
@@ -221,7 +417,7 @@ question names a technique, and the p90 chunk is the passage that describes that
 plausible-but-wrong passage a system would actually be tempted to answer from is the one retrieval
 surfaces, not the one the fixture nominates. So **v3 describes a lure the system does not fall
 for, and omits the one it does.** The `why_unanswerable` reasoning behind u06 is still correct —
-the corpus genuinely never prices context-enriched chunking — it is the *choice of near-miss span*
+the corpus genuinely never prices context-enriched chunking — it is the _choice of near-miss span_
 that does not match retrieval's behaviour.
 
 **Cost of the limitation.** u06 is UNSCORED in every arm at `ABSTENTION_TOP_K = 1`, so its
@@ -230,7 +426,7 @@ fixture — contributing no signal at all**, and it is why coverage reads 5/6 ra
 every configuration measured.
 
 **Explicitly NOT the chunk 7 open question.** The reranker moving this lure from rank 2 to rank 6
-is *not* evidence that the cross-encoder demotes correct chunks — this chunk is a lure on an
+is _not_ evidence that the cross-encoder demotes correct chunks — this chunk is a lure on an
 unanswerable question, not a correct answer. That open question is recorded separately and is
 fitted only on the answerable set. Conflating them would corrupt chunk 7's threshold calibration.
 
@@ -268,23 +464,23 @@ evidence of corpus drift on an unrebuildable corpus, never a threshold to re-ble
 
 Reranker ON, n = 30, `mrr_depth=10`:
 
-| arm | recall@5 | recall@10 | recall@30 | mrr@10 |
-| --- | --- | --- | --- | --- |
-| lexical | 0.500 | 0.533 | 0.567 | 0.489 |
-| vector | **0.733** | **0.867** | **1.000** | **0.624** |
-| hybrid | 0.733 | 0.867 | 0.967 | 0.621 |
+| arm     | recall@5  | recall@10 | recall@30 | mrr@10    |
+| ------- | --------- | --------- | --------- | --------- |
+| lexical | 0.500     | 0.533     | 0.567     | 0.489     |
+| vector  | **0.733** | **0.867** | **1.000** | **0.624** |
+| hybrid  | 0.733     | 0.867     | 0.967     | 0.621     |
 
 **Hybrid beats vector-only on none of the four metrics.** It ties on two and loses on two.
 **mrr@10 −0.003** is below this benchmark's resolution (one question = 3.3 recall points) and is
 recorded as a **tie**, not as "hybrid nearly won".
 
-**The single falsifying number is not a reranked result.** recall@30 is *identical to the
-pre-rerank gate tuple in every arm* — vector 1.000/1.000, hybrid 0.967/0.967, lexical
+**The single falsifying number is not a reranked result.** recall@30 is _identical to the
+pre-rerank gate tuple in every arm_ — vector 1.000/1.000, hybrid 0.967/0.967, lexical
 0.567/0.567. For the single arms it could not have moved: `candidate_k = 30`, so vector's pool is
 exactly 30 and reordering inside it cannot change the top-30 set. Hybrid's pool is 40 and was free
 to move; it did not. **recall@30 −0.033 is a pool-membership fact that was already true before the
 cross-encoder ran:** RRF fuses lexical's 30 with vector's 30, cuts to 40, and drops a gold chunk
-vector-only had *out of the candidate pool entirely*. Nothing downstream can recover a chunk the
+vector-only had _out of the candidate pool entirely_. Nothing downstream can recover a chunk the
 reranker never receives.
 
 **Consequence — fusion's only measurable net effect on answerable retrieval is that it loses one
@@ -329,8 +525,8 @@ measurement of the mechanism behind it.
 
 **Coverage is 5/6, and the missing item is diagnosed, not left open — u06's lure never fired.**
 u06 is a near-miss unanswerable, so its `near_miss_to` chunk is the **lure**, not a correct
-answer. That lure (p95, the agentic-chunking *pricing* passage) never reached rank 1: all three
-arms rank the p90 chunk describing the *technique* the question names first. Observed lure ranks —
+answer. That lure (p95, the agentic-chunking _pricing_ passage) never reached rank 1: all three
+arms rank the p90 chunk describing the _technique_ the question names first. Observed lure ranks —
 **lexical: not in pool; vector 2 → 6; hybrid 8 → 6.** Nothing filtered it. At
 `ABSTENTION_TOP_K = 1` the decision reads only `hits[0]`, so the lure was never put in front of
 it. **u06's abstention behaviour was therefore never exercised — untested, not passed.** That is
@@ -384,7 +580,7 @@ This verdict is falsifiable, and these are the two conditions that falsify it:
    and a real signal choice, come back.
 2. **A near-miss set large enough that top-1 convergence is not total.** Six items where all three
    arms agree on all six is not evidence that convergence is universal; it is evidence that it is
-   universal *here*. One near-miss on which the arms disagree at rank 1 re-opens the question.
+   universal _here_. One near-miss on which the arms disagree at rank 1 re-opens the question.
 
 **Changing `ABSTENTION_TOP_K` voids this entry**, exactly as it voids every recorded coverage
 figure, because the item set every claim here is fitted on changes. Any entry that changes that
@@ -393,7 +589,7 @@ constant must name this entry among the figures it voids, in that entry, at the 
 **Cross-reference:** rests on **2026-08-23 — "the chunk 5 block is VOID"** and the coverage table
 in **2026-08-21 — "near-miss coverage is parameterised, not a property of the golden set"**. The
 answerable figures supersede nothing in **`docs/BASELINE-v3-chunk3.md`** — that document's MRR
-column (0.707 / 0.450 / 0.152) is the *unbounded* metric from before `MRR_DEPTH` existed and is a
+column (0.707 / 0.450 / 0.152) is the _unbounded_ metric from before `MRR_DEPTH` existed and is a
 different key from the `mrr@10` used throughout here.
 
 ---
@@ -409,17 +605,17 @@ signal.
 benchmark **cannot discriminate between arms in either reranker configuration**, so it cannot
 produce a cross-arm result for chunk 5 to gate on:
 
-| configuration | what the arms do | why no comparison exists |
-| --- | --- | --- |
-| `--reranker none` | arms score **different near-miss item sets** (lexical 2/6, vector 2/6, hybrid 4/6) | lexical∩vector = **exactly one item** (u03); rates fitted on different populations are not comparable |
-| `--reranker local` | all three arms return an **identical top-1 on all 6 near-misses** | the rates are then identical **by construction**, not by measurement |
+| configuration      | what the arms do                                                                   | why no comparison exists                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `--reranker none`  | arms score **different near-miss item sets** (lexical 2/6, vector 2/6, hybrid 4/6) | lexical∩vector = **exactly one item** (u03); rates fitted on different populations are not comparable |
+| `--reranker local` | all three arms return an **identical top-1 on all 6 near-misses**                  | the rates are then identical **by construction**, not by measurement                                  |
 
 Either the arms are not comparable or they are trivially equal. There is no configuration at this
 `k` in which the abstention half distinguishes them. The underlying per-arm coverage is the table
 recorded on 2026-08-21 ("near-miss coverage is parameterised, not a property of the golden set").
 
-**No choice of abstention signal changes this.** Both halves of the table are properties of *which
-item is at rank 1* — set membership without the reranker, set identity with it. A signal computed
+**No choice of abstention signal changes this.** Both halves of the table are properties of _which
+item is at rank 1_ — set membership without the reranker, set identity with it. A signal computed
 **on** that top-1 hit cannot separate arms that were handed the same hit, nor make comparable two
 rates fitted on near-disjoint item sets. **This is why moving off `rrf_score` was never the gate:**
 the 2026-08-19 finding that `rrf_score` structurally cannot signal abstention remains true and
@@ -463,11 +659,11 @@ miss coverage had never been measured. **That reading is withdrawn.**
 
 `ABSTENTION_TOP_K = 1`, `candidate_k=30`, `rrf_k=5`, `rerank_n=40`:
 
-| arm | `--reranker none` | SCORED | `--reranker local` | SCORED |
-| --- | --- | --- | --- | --- |
-| lexical | **2/6** | u03, u04 | 5/6 | u01–u05 |
-| vector | **2/6** | u01, u03 | 5/6 | u01–u05 |
-| hybrid | **4/6** | u01, u02, u03, u04 | 5/6 | u01–u05 |
+| arm     | `--reranker none` | SCORED             | `--reranker local` | SCORED  |
+| ------- | ----------------- | ------------------ | ------------------ | ------- |
+| lexical | **2/6**           | u03, u04           | 5/6                | u01–u05 |
+| vector  | **2/6**           | u01, u03           | 5/6                | u01–u05 |
+| hybrid  | **4/6**           | u01, u02, u03, u04 | 5/6                | u01–u05 |
 
 1. **On `ABSTENTION_TOP_K`** — it defines which hits the check may look at, so it defines the item
    set every rate is fitted on.
@@ -512,7 +708,7 @@ report will not produce one silently.
 0.233/0.400/0.567/0.142, vector 0.833/0.900/1.000/0.700, hybrid 0.667/0.867/0.967/0.445), the
 no-rerank abstention `rrf_score` column is unchanged, and `retrieval.py`'s pre-rerank digest
 `3ffa60b3…` still passes. The `--reranker local` run doubles as the **negative control** for the
-suppression rule — it is the case that must *not* suppress, and does not. $0, warm cache.
+suppression rule — it is the case that must _not_ suppress, and does not. $0, warm cache.
 
 ---
 
@@ -530,11 +726,11 @@ inside a change scoped to UNSCORED would have settled it by side effect.
 
 **Three outcomes, one of which is live:**
 
-| span retrieved | abstained | outcome | counts toward |
-| -------------- | --------- | ------- | ------------- |
-| yes | yes | `ABSTAINED` (correct) | numerator + denominator |
-| yes | no | `ANSWERED` (confabulation, failure) | denominator only |
-| no | either | `UNSCORED` | neither |
+| span retrieved | abstained | outcome                             | counts toward           |
+| -------------- | --------- | ----------------------------------- | ----------------------- |
+| yes            | yes       | `ABSTAINED` (correct)               | numerator + denominator |
+| yes            | no        | `ANSWERED` (confabulation, failure) | denominator only        |
+| no             | either    | `UNSCORED`                          | neither                 |
 
 `UNSCORED` depends only on retrieval, so it runs today. The abstain/answer input is
 `evaluate(abstained_by=...)`, defaulting to `None` — chunk 5 passes one argument and the other
@@ -556,15 +752,15 @@ decision's k and the check's k cannot drift apart.
 
 **Measured, `--reranker none`, hybrid, `candidate_k=30`, `rrf_k=5`: coverage is 4/6.**
 
-| id | rank of gold chunk | verdict |
-| --- | --- | --- |
-| u01, u02, u03, u04 | 1 | SCORED |
-| u05 | 9 | **UNSCORED** |
-| u06 | 8 | **UNSCORED** |
+| id                 | rank of gold chunk | verdict      |
+| ------------------ | ------------------ | ------------ |
+| u01, u02, u03, u04 | 1                  | SCORED       |
+| u05                | 9                  | **UNSCORED** |
+| u06                | 8                  | **UNSCORED** |
 
 **Correction to golden set v3's Note-2 immunity table.** It listed `u04` and `u06` as immune
 because their spans are byte-identical to `a22`'s and `a15`'s evidence. `u06` is not immune:
-immunity is a property of *a15's question*, not of u06's, and at the k the decision consumes,
+immunity is a property of _a15's question_, not of u06's, and at the k the decision consumes,
 u06's gold chunk sits at rank 8. Recorded because that table is otherwise load-bearing for how
 chunk 5 reads its numbers — and it is exactly the silent decay the note itself predicted.
 
@@ -576,13 +772,13 @@ are scored (`n/a (0 scored of 6)`, never `0.000`, which would read as "abstained
 instead of "measured nothing") or when no decision is wired. `n_scored`/`n_unscored` are report
 fields, so a programmatic caller cannot read the rate without them either.
 
-**Nothing recorded is voided.** No abstention *rate* has ever been recorded — checked all three
+**Nothing recorded is voided.** No abstention _rate_ has ever been recorded — checked all three
 places: this log's chunk 3 entry (2026-08-20), `docs/BASELINE-v3-chunk3.md` §3, and SCRATCHPAD.
 What exists is a per-question top-1 `rrf_score` column, already caveated in both places as not a
 pass rate. This change does not touch that `retrieve()` call, so the column reproduces
 byte-identically (u03 0.33333, u01 0.30952, u02 0.26786, u04 0.25000, u05 0.24286, u06 0.21212)
 and stays comparable. **Boundary:** when chunk 5 replaces `rrf_score` as the abstention signal,
-that column *does* become non-comparable — and the void belongs to the entry that makes the
+that column _does_ become non-comparable — and the void belongs to the entry that makes the
 switch, not to this one.
 
 **Regression gate held.** `evaluate` with no flags reproduces all twelve answerable figures
@@ -598,13 +794,13 @@ no network.
 **Decision:** chunk 4 is closed. The reranker exists, is wired end to end, and all four benchmark
 arms are producible. Five commits on `main`, not pushed (no remote):
 
-| Commit | What |
-| ------ | ---- |
+| Commit    | What                                                                                                       |
+| --------- | ---------------------------------------------------------------------------------------------------------- |
 | `5db0925` | `app/services/reranking.py` — protocol, `NoOpReranker`, `LocalOnnxReranker`, fetch script, pinned manifest |
-| `e806aad` | `retrieve()` accepts a `Reranker`; NoOp proven byte-identical to the pre-rerank path |
-| `0edbb39` | MRR pinned to a fixed depth (MRR@10); `EvaluationReport` names its reranker |
-| `797bcde` | ruff pre-commit pin aligned to the venv (v0.8.6 -> v0.16.3) |
-| `09598e1` | Reranker constructed from config; **all three arms routed through `retrieve()`** |
+| `e806aad` | `retrieve()` accepts a `Reranker`; NoOp proven byte-identical to the pre-rerank path                       |
+| `0edbb39` | MRR pinned to a fixed depth (MRR@10); `EvaluationReport` names its reranker                                |
+| `797bcde` | ruff pre-commit pin aligned to the venv (v0.8.6 -> v0.16.3)                                                |
+| `09598e1` | Reranker constructed from config; **all three arms routed through `retrieve()`**                           |
 
 ### The harness gap found at the end, and why it mattered
 
@@ -621,18 +817,18 @@ empty — asserted, not assumed: with `--reranker none` all twelve recorded figu
 Golden set v3, n=30 answerable, `candidate_k=30`, `rrf_k=5`, `rerank_n=40`, MRR@10. $0 (cached
 query vectors). Full reranked run: 3m53s.
 
-| arm | recall@5 | recall@10 | recall@30 | mrr@10 | | recall@5 | recall@10 | recall@30 | mrr@10 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | **no rerank** | | | | | **+ rerank** | | | |
-| lexical | 0.233 | 0.400 | 0.567 | 0.142 | → | **0.500** | **0.533** | 0.567 | **0.489** |
-| vector | 0.833 | 0.900 | 1.000 | 0.700 | → | **0.733** | **0.867** | 1.000 | **0.624** |
-| hybrid | 0.667 | 0.867 | 0.967 | 0.445 | → | **0.733** | 0.867 | 0.967 | **0.621** |
+| arm     | recall@5      | recall@10 | recall@30 | mrr@10 |     | recall@5     | recall@10 | recall@30 | mrr@10    |
+| ------- | ------------- | --------- | --------- | ------ | --- | ------------ | --------- | --------- | --------- |
+|         | **no rerank** |           |           |        |     | **+ rerank** |           |           |           |
+| lexical | 0.233         | 0.400     | 0.567     | 0.142  | →   | **0.500**    | **0.533** | 0.567     | **0.489** |
+| vector  | 0.833         | 0.900     | 1.000     | 0.700  | →   | **0.733**    | **0.867** | 1.000     | **0.624** |
+| hybrid  | 0.667         | 0.867     | 0.967     | 0.445  | →   | **0.733**    | 0.867     | 0.967     | **0.621** |
 
 **Reranking DEGRADED vector-only.** recall@5 0.833 -> 0.733, MRR@10 0.700 -> 0.624. The
-cross-encoder pushes gold chunks *down* out of the top 5 that the embedding already had correct.
+cross-encoder pushes gold chunks _down_ out of the top 5 that the embedding already had correct.
 
-**This contradicts the stated prediction.** DECISIONS.md, 2026-08-19: *"Step 03's reranker is the
-intended fix, since RRF alone can't distinguish lexical signal from lexical noise"* — the reranker
+**This contradicts the stated prediction.** DECISIONS.md, 2026-08-19: _"Step 03's reranker is the
+intended fix, since RRF alone can't distinguish lexical signal from lexical noise"_ — the reranker
 was expected to recover precision-at-1. It does exactly that for the arms RRF damaged (lexical
 +0.347 MRR, hybrid +0.176) and costs accuracy on the arm that was already strongest. Recorded flat,
 unsoftened, the same way Step 02's DoD #5 was recorded NOT MET rather than "partially met".
