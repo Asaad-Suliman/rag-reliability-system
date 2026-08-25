@@ -29,3 +29,10 @@ tests/fixtures/query_embeddings.json
 # silently ignored and the drift detector would never be committed. The manifest
 # lives outside this tree, at scripts/reranker_model.sha256, for that reason.
 models/reranker/
+
+# tiktoken's cl100k_base BPE cache, ~1.7 MiB, fetched by
+# scripts/fetch_tiktoken_cache.py. Never committed, same reasoning as
+# models/reranker/ above -- and the same trap: do NOT try to re-include
+# scripts/tiktoken_cache.sha256 with a `!` negation under this path. That
+# manifest lives outside this tree for that reason.
+models/tiktoken/

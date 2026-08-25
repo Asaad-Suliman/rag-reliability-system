@@ -18,7 +18,9 @@ exactly one implemented strategy (`PresentationOrder.RERANKER_ORDER`). Coherence
 reordering and lost-in-the-middle placement are unmeasured variables and there is
 no harness to evaluate them until generation exists.
 
-No network, no new dependency. Run the self-check:
+Counting requires `tiktoken` and a populated `models/tiktoken/` cache (see
+`scripts/fetch_tiktoken_cache.py`) — no network at call time, but not
+dependency-free either, unlike the rest of this module. Run the self-check:
 
     uv run python -m app.services.context_budget
 """
@@ -26,6 +28,7 @@ No network, no new dependency. Run the self-check:
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -52,9 +55,53 @@ from app.services.retrieval import RetrievedChunk
 # against the reference tokenizer instead of against this heuristic.
 CHARS_PER_TOKEN = 3.5
 
+# tiktoken cl100k_base's own cache directory -- must match
+# `scripts/fetch_tiktoken_cache.py`'s `DEFAULT_DEST`. Duplicated as a plain
+# path constant (not imported from `scripts/`) on purpose: this module is
+# runtime application code and must not depend on `scripts/`, which is a
+# build-time-only directory with no guarantee of being present in a deployed
+# image. It is safe to duplicate because it is our own naming convention
+# (like `reranking.DEFAULT_MODEL_DIR`), not a value derived from anything
+# that could drift out from under it.
+TIKTOKEN_CACHE_DIR = Path("models/tiktoken")
+
+# Covers cross-tokenizer drift among BPE-family models ONLY -- e.g. cl100k_base
+# vs a different vocab/merge table another BPE tokenizer might use for
+# semantically similar text. It does NOT cover structural fragmentation
+# (dense tables, TOCs, glued numeric compounds — see HeuristicCharCounter's
+# docstring and docs/DECISIONS.md, 2026-08-24 chunk 7 Phase D): those are a
+# property of the TEXT, not of which BPE vocabulary tokenizes it, so a
+# constant multiplier does not model them and TiktokenCounter's raw count
+# already reflects them directly (tiktoken tokenizes the real text, fragmented
+# text or not). PROVISIONAL: sized as a round, generous cross-family margin
+# with no measurement behind it, because the generation model is still
+# unpinned (Chunk 7+) — there is nothing to measure the drift against yet.
+# Revisit the moment there is.
+CROSS_TOKENIZER_SAFETY_FACTOR = 1.2
+
+
+class TiktokenCacheMissing(RuntimeError):
+    """tiktoken could not load cl100k_base from the local cache.
+
+    `TiktokenCounter` blocks socket connections for the duration of the load
+    (see its `__init__`), so a missing or non-matching cache raises this
+    instead of silently falling through to a real network fetch. Chunk 7
+    Phase E found that depending on a caller-set `TIKTOKEN_CACHE_DIR` env var
+    is a real defect — proven under network-namespace isolation: unset, the
+    load attempts a genuine HTTPS connection instead of failing closed. This
+    class and the socket guard exist specifically so that defect cannot
+    recur here, regardless of whether some future caller also forgets to set
+    the env var.
+
+    Never caught and downgraded to `HeuristicCharCounter` — a silent
+    downgrade is exactly the failure mode this exists to prevent. Run
+    `uv run python -m scripts.fetch_tiktoken_cache --allow-network
+    --write-manifest` to populate the cache.
+    """
+
 
 class TokenCounter(Protocol):
-    """How many tokens a string costs. Injected, never constructed inline.
+    """How many tokens a string costs, as charged against the budget.
 
     `name` is the counter's identity in the run manifest: two runs with the same
     corpus and the same reranker but different counters are not comparable, and
@@ -68,20 +115,31 @@ class TokenCounter(Protocol):
 
 
 class HeuristicCharCounter:
-    """Offline, dependency-free, deliberately pessimistic.
+    """Offline, dependency-free, deliberately pessimistic. NO LONGER THE
+    BUDGET-SAFETY MECHANISM as of Chunk 7 Phase E — kept available (some
+    caller may still want a zero-dependency estimate), but `plan_context`
+    defaults to `TiktokenCounter`, not this.
 
     `ceil(ascii_chars / CHARS_PER_TOKEN) + non_ascii_chars`.
+
+    **Its "never under-count" invariant does NOT hold, measured.** Chunk 7
+    Phase C/D (docs/DECISIONS.md, 2026-08-24) found, against tiktoken
+    cl100k_base: **min margin 0.9722x on the live 260-chunk corpus** (4
+    chunks under-count), and **min margin 0.6257x on a synthetic adversarial
+    block** (glued numeric compounds — `$0.50`, `500,000-token`, `95-99%` —
+    mixed with short newline-delimited lines). The only property that was
+    ever actually proven is "never under-counts against WordPiece on this
+    corpus's prose" — narrower than the docstring used to claim, and not the
+    property the budget needs.
 
     The non-ASCII term charges one token per non-ASCII character. It is inert on
     this corpus (291 such characters in 273k, changing no count), and it costs
     one line — but a pure chars/N ratio under-counts badly on CJK, where BPE
-    runs at roughly one token per character. The stated invariant is "never
-    under-count"; a rule that only holds for Latin text does not meet it.
+    runs at roughly one token per character.
 
-    ponytail: a heuristic, not a tokenizer. The ceiling is that its margin is
-    measured against WordPiece on English prose only. Upgrade path is a
-    tiktoken-backed counter once the generation model is pinned (Chunk 7+) —
-    at which point `_check_never_undercounts` must be re-run against it.
+    ponytail: a heuristic, not a tokenizer, and demonstrably not a safe one
+    for anything table/list/identifier-dense. `TiktokenCounter` is the
+    replacement; see it for what changed.
     """
 
     name = "heuristic-char-3.5-v1"
@@ -89,6 +147,59 @@ class HeuristicCharCounter:
     def count(self, text: str) -> int:
         non_ascii = sum(1 for ch in text if ord(ch) > 127)
         return math.ceil((len(text) - non_ascii) / CHARS_PER_TOKEN) + non_ascii
+
+
+class TiktokenCounter:
+    """The budget-safety mechanism as of Chunk 7 Phase E. Exact tiktoken
+    cl100k_base counts, times `CROSS_TOKENIZER_SAFETY_FACTOR` (see that
+    constant for exactly what the factor does and does not cover).
+
+    Resolves its own cache directory (`TIKTOKEN_CACHE_DIR`) rather than
+    depending on a caller-set `TIKTOKEN_CACHE_DIR` env var — Phase E
+    verification found that dependency was a real defect (see
+    `TiktokenCacheMissing`). Never falls back to network or to
+    `HeuristicCharCounter`: a missing/stale cache is a deployment defect to
+    fix, not a runtime condition to route around.
+    """
+
+    name = f"tiktoken-cl100k_base-v1+{CROSS_TOKENIZER_SAFETY_FACTOR}x-cross-tokenizer"
+
+    def __init__(self, cache_dir: Path = TIKTOKEN_CACHE_DIR) -> None:
+        import socket
+
+        os.environ["TIKTOKEN_CACHE_DIR"] = str(cache_dir)
+
+        real_connect = socket.socket.connect
+        real_getaddrinfo = socket.getaddrinfo
+
+        def _blocked(*_args: object, **_kwargs: object) -> None:
+            raise TiktokenCacheMissing(
+                f"tiktoken attempted a real network call while loading "
+                f"cl100k_base -- the cache at {cache_dir} is missing or does "
+                "not match what tiktoken expects. TiktokenCounter never "
+                "falls back to network or to HeuristicCharCounter. Run `uv "
+                "run python -m scripts.fetch_tiktoken_cache --allow-network "
+                "--write-manifest` to populate it."
+            )
+
+        # Both DNS resolution and the raw connect are blocked -- Phase E
+        # found that in a network-namespace-isolated test, DNS fails first
+        # and `.connect` is never reached; in a real deployment with working
+        # DNS, `.connect` is what would actually be attempted. Blocking both
+        # makes the guarantee hold regardless of the network environment.
+        socket.getaddrinfo = _blocked  # type: ignore[assignment]
+        socket.socket.connect = _blocked  # type: ignore[method-assign]
+        try:
+            import tiktoken
+
+            self._encoding = tiktoken.get_encoding("cl100k_base")
+        finally:
+            socket.getaddrinfo = real_getaddrinfo
+            socket.socket.connect = real_connect  # type: ignore[method-assign]
+
+    def count(self, text: str) -> int:
+        raw = len(self._encoding.encode(text))
+        return math.ceil(raw * CROSS_TOKENIZER_SAFETY_FACTOR)
 
 
 # --- budget ------------------------------------------------------------------
@@ -183,6 +294,26 @@ class MixedScoreSources(BudgetError):
     scales and would do it silently, always ordering every reranked hit above
     every un-reranked one regardless of relevance. Uniformity is what makes the
     RRF fallback in `_score_source` sound; this is not a general comparator.
+    """
+
+
+class ProvenanceHeaderUnmeasured(RuntimeError):
+    """Blocking prerequisite for chunk 7, not a runtime budgeting failure —
+    not a `BudgetError` subclass on purpose, so it is never swallowed by
+    `app/cli.py`'s `refused:` handler; it must stop `_demo()` visibly.
+
+    Raised unconditionally by `_check_provenance_header_pending` at the end
+    of every `_demo()` run. See that function for the full story: the
+    2026-08-24 DECISIONS.md correction RETRACTED the claim that
+    `PER_CHUNK_OVERHEAD_TOKENS = 96` was measured — the renderer it was
+    supposedly measured against does not exist, and 3 of the 5 recorded
+    header formats never had a literal template on record. 96 is now an
+    UNVALIDATED ESTIMATE. This stays red — `uv run python -m
+    app.services.context_budget` cannot pass clean — until chunk 7's real
+    renderer exists and `scripts/validate_token_counter.py` (without
+    `--skip-headers`) has measured its real header formats against
+    `PER_CHUNK_OVERHEAD_TOKENS`. Delete this class and its call site then,
+    not before.
     """
 
 
@@ -354,13 +485,21 @@ def _selection_key(hit: RetrievedChunk, source: ScoreSource) -> tuple[float, str
 def plan_context(
     hits: Sequence[RetrievedChunk],
     budget: ContextBudget,
-    counter: TokenCounter,
+    counter: TokenCounter | None = None,
     order: PresentationOrder = PresentationOrder.RERANKER_ORDER,
 ) -> BudgetedContext:
     """Greedily select whole chunks by score until the budget is spent.
 
-    `counter` has no default: a budget measured with an unknown counter is not
-    a budget, and a default here would let one arrive by accident.
+    `counter` defaults to `TiktokenCounter` (Chunk 7 Phase E) — the previous
+    "no default, ever" stance was dropped deliberately, not by accident:
+    that stance existed because any implicit default was equally arbitrary
+    among untrustworthy options. That is no longer true — `TiktokenCounter`
+    is the validated safety mechanism, and `counter_name`/`budget_manifest`
+    still always record which counter actually ran, so a default cannot
+    silently go untracked the way the original concern worried about.
+    Constructed lazily (not as a literal default argument) so importing this
+    module never requires the tiktoken cache to be present — only calling
+    `plan_context()` without an explicit `counter` does.
 
     Greedy by score, not by score-per-token. That is knapsack-suboptimal in
     general, and right here: chunk sizes are tightly clustered (69-1999 chars),
@@ -375,6 +514,9 @@ def plan_context(
     Raises `ChunkExceedsBudget` if any single hit cannot fit on its own — see
     that exception for why that is an invariant and not a runtime condition.
     """
+    if counter is None:
+        counter = TiktokenCounter()
+
     if not hits:
         return BudgetedContext(
             included=[],
@@ -677,6 +819,26 @@ def _check_never_undercounts(
     return min(margins)[0]
 
 
+def _check_provenance_header_pending() -> None:
+    """Unconditional failure. See `ProvenanceHeaderUnmeasured` for the full
+    story — this is its only call site, kept as a one-line function so the
+    thing that blocks chunk 7 is a single, greppable, undeletable line in
+    `_demo()` rather than a comment someone can skim past.
+    """
+    raise ProvenanceHeaderUnmeasured(
+        "PER_CHUNK_OVERHEAD_TOKENS=96 is an UNVALIDATED ESTIMATE, not a "
+        "measured figure — see docs/DECISIONS.md, 2026-08-24 (correction), "
+        "which RETRACTS the earlier chunk 6 entry's claim that it was "
+        '"MEASURED, not asserted." No renderer that emits a provenance '
+        "header exists in this codebase yet, and 3 of the 5 header formats "
+        "that claim cited never had a literal template on record. Build "
+        "chunk 7's renderer, run `uv run python -m "
+        "scripts.validate_token_counter` WITHOUT --skip-headers to measure "
+        "its real formats against PER_CHUNK_OVERHEAD_TOKENS, then delete "
+        "this check and its call site."
+    )
+
+
 def _demo() -> None:
     import asyncio
 
@@ -688,7 +850,7 @@ def _demo() -> None:
     counter = HeuristicCharCounter()
     _check_offline(counter)
 
-    async def run_live() -> tuple[int, int, float]:
+    async def run_live() -> tuple[int, int, float, int]:
         settings = get_settings()
         engine = create_engine(settings)
         session_factory = create_session_factory(engine)
@@ -716,19 +878,48 @@ def _demo() -> None:
         )
 
         # (1) the never-under-count property, over every chunk in the corpus.
+        # Historical record only as of Chunk 7 Phase E -- see
+        # HeuristicCharCounter's docstring: this property does not generalize,
+        # and this counter is no longer what the budget is safe because of.
         margin = _check_never_undercounts(
             counter, texts, settings.reranker_model_dir / TOKENIZER_FILENAME
         )
-        return len(texts), worst, margin
 
-    n, worst, margin = asyncio.run(run_live())
+        # The actual budget-safety mechanism now: TiktokenCounter, including
+        # CROSS_TOKENIZER_SAFETY_FACTOR. This is the number that determines
+        # whether a real retrieval can raise ChunkExceedsBudget -- the
+        # HeuristicCharCounter figure above no longer is.
+        tiktoken_counter = TiktokenCounter()
+        tiktoken_worst = max(tiktoken_counter.count(t) for t in texts) + PER_CHUNK_OVERHEAD_TOKENS
+        assert tiktoken_worst <= default.usable_budget, (
+            f"the largest corpus chunk costs {tiktoken_worst} tokens under "
+            f"{tiktoken_counter.name} but usable_budget is {default.usable_budget} "
+            "-- every retrieval would raise ChunkExceedsBudget."
+        )
+        return len(texts), worst, margin, tiktoken_worst
+
+    n, worst, margin, tiktoken_worst = asyncio.run(run_live())
+    usable = ContextBudget().usable_budget
     print(
-        f"ok: {counter.name} never under-counts across {n} corpus chunks "
-        f"(min margin {margin:.4f}x vs the vendored reference tokenizer); "
-        f"worst-case hit {worst} tokens fits usable_budget {ContextBudget().usable_budget}; "
-        "whole-chunk selection, tie-break, determinism, exclusion accounting, "
-        "score-source uniformity, and the manifest block all hold"
+        f"ok (historical, HeuristicCharCounter -- no longer the safety mechanism): "
+        f"{HeuristicCharCounter.name} never under-counts across {n} corpus chunks "
+        f"(min margin {margin:.4f}x vs the vendored WordPiece reference); "
+        f"worst-case hit {worst} tokens."
     )
+    print(
+        f"ok (current safety mechanism): {TiktokenCounter.name} worst-case hit "
+        f"across {n} corpus chunks is {tiktoken_worst} tokens, fits usable_budget "
+        f"{usable} (headroom {usable - tiktoken_worst}). usable_budget itself is "
+        "unchanged -- it is pure reserve arithmetic (context_window minus three "
+        "reserves), independent of which counter runs; what changed is the "
+        "per-chunk cost charged against it. whole-chunk selection, tie-break, "
+        "determinism, exclusion accounting, score-source uniformity, and the "
+        "manifest block all hold"
+    )
+
+    # BLOCKING PREREQUISITE for chunk 7 — see ProvenanceHeaderUnmeasured.
+    # Everything above just passed; this still fails the module on purpose.
+    _check_provenance_header_pending()
 
 
 if __name__ == "__main__":

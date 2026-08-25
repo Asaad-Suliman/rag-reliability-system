@@ -31,6 +31,14 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    # Pinned exactly, not floated -- scripts/validate_token_counter.py measures
+    # a property (never-under-count margin) against this exact tokenizer
+    # version's cl100k_base output; a silent minor-version bump could change
+    # BPE merges and invalidate a recorded margin without anyone noticing.
+    # Declared only -- not installed. `uv add tiktoken==0.8.0` (Phase B, after
+    # approval) resolves and locks it; confirm 0.8.0 is still current on PyPI
+    # at that point and bump deliberately if not.
+    "tiktoken==0.8.0",
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit>=4.0",
