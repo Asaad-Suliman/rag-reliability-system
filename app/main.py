@@ -17,7 +17,7 @@ from app.core.middleware import RequestIDMiddleware
 from app.db.session import create_engine, create_session_factory, ping
 from app.documents.status import assert_status_enum_matches_db
 from app.services.reranking import RerankerModelMissing, build_reranker
-from app.services.vector_store import ChromaVectorStore
+from app.services.vector_store import CORPUS_DIR, ExactVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +30,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.engine = create_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)
-    app.state.vector_store = ChromaVectorStore(settings.chroma_persist_dir)
+    app.state.vector_store = ExactVectorStore()
 
     # Loaded ONCE, here, and injected into `retrieve()` as a parameter — never
     # per request, and never imported as a module global. An InferenceSession
     # costs a few hundred ms to build and holds 22 MiB; building one per request
     # would be the single worst thing in the query path.
     #
-    # Fatal on failure, unlike the Postgres/Chroma probes below. Those stay
+    # Fatal on failure, unlike the Postgres/vector probes below. Those stay
     # non-fatal so /health/ready can *report* a dependency being down — they are
     # external and transient. A missing or mismatched weight file is neither: it
     # is a build defect that will never fix itself, and the alternative is
@@ -81,10 +81,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     try:
         await app.state.vector_store.check(STARTUP_PROBE_TIMEOUT_SECONDS)
-        logger.info("chroma reachable", extra={"persist_dir": str(settings.chroma_persist_dir)})
+        logger.info("vector corpus loaded", extra={"corpus_dir": str(CORPUS_DIR)})
     except Exception as exc:
         logger.error(
-            "chroma unreachable at startup — /health/ready will report 503",
+            "vector corpus unavailable at startup — /health/ready will report 503",
             extra={"reason": str(exc)},
         )
 

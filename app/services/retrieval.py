@@ -1,7 +1,7 @@
 """Hybrid retrieval: Postgres full-text search + vector search, fused with RRF.
 
 Two independent ranked lists over the same 260-chunk corpus, combined by rank
-(not score) because `ts_rank_cd` and Chroma cosine distance are not on
+(not score) because `ts_rank_cd` and vector L2 distance are not on
 comparable scales — see `_rrf_fuse()`. Every returned hit carries the
 provenance Step 03's Verifier and the API Contract's citation payload need:
 `document_id`, `page`, `char_start`, `char_end`, plus the per-arm ranks/scores
@@ -180,7 +180,7 @@ async def vector_search(
     document_ids: list[str] | None,
     query_vector: list[float] | None = None,
 ) -> list[_VectorHit]:
-    """Chroma ANN search. Embeds as `input_type="query"` — the corpus was
+    """Exact vector search. Embeds as `input_type="query"` — the corpus was
     embedded as `document`; voyage-4-lite is asymmetric and mixing the two
     costs real recall.
 
@@ -273,8 +273,8 @@ async def retrieve(
     merely convenient: with it, this function's output is **byte-identical** to
     the pre-reranker implementation, which is what makes chunk 5's no-rerank
     arm a genuine baseline instead of a second code path. `_demo()` asserts
-    that against a digest captured from commit `5db0925`, before this parameter
-    existed. `RerankError` is deliberately *not* caught here — see its
+    that against a pinned digest whose lineage runs back to commit `5db0925`,
+    before this parameter existed. `RerankError` is deliberately *not* caught here — see its
     docstring for why the policy belongs at each boundary instead.
     """
     lexical_hits = (
@@ -304,7 +304,7 @@ async def retrieve(
     # ponytail: with NoOpReranker this builds N objects and then discards all
     # but top_k. Deliberate — branching on "is there a reranker" would create
     # the second code path chunk 5 must not have. The waste is bounded (one
-    # wider IN, a few dozen dataclasses) and invisible next to the Chroma query.
+    # wider IN, a few dozen dataclasses) and invisible next to the vector query.
     pool_size = max(rerank_n, top_k)
     ranked_ids = sorted(fused, key=lambda cid: fused[cid][0], reverse=True)[:pool_size]
     if not ranked_ids:
@@ -321,9 +321,8 @@ async def retrieve(
         rrf_score, lex_rank, lex_score, vec_rank, vec_distance = fused[cid]
         chunk_text = matched_hit.text
         if chunk_text is None:
-            # Vector arm didn't include `documents` in its include list, or the
-            # only source for this chunk was Chroma metadata without a body —
-            # shouldn't happen given ChromaVectorStore always stores it, but
+            # Vector arm returned no body for this chunk — shouldn't happen,
+            # since the frozen corpus manifest carries the document text, but
             # fail loudly rather than emit a hit the Verifier can't score.
             raise RuntimeError(f"chunk {cid} has no text from either retrieval arm")
         candidates.append(
@@ -361,23 +360,62 @@ async def retrieve(
 
 # --- the chunk 5 guarantee ---------------------------------------------------
 # The no-rerank benchmark arm is only a real baseline if it is the *same* code
-# path as the reranked one. These pin that: the digest below was captured from
-# the pre-reranker implementation, so it is ground truth this code did not
-# produce — the same discipline chunk 2 used when it cross-checked v3's
-# offset-resolved gold ids against v2's independently recorded chunk_ids.
+# path as the reranked one. These pin that. The digest's lineage runs back to
+# the pre-reranker implementation at 5db0925 — see the note above the constant
+# for what changed when the vector backend was replaced, and what was measured
+# before the value was re-pinned.
 
 _PRE_RERANK_COMMIT = "5db0925"
 _BASELINE_QIDS = ("a01", "a05", "a09", "a13", "a17", "a21", "a25", "u01")
 
 # sha256 over every pre-rerank field of every hit, for the 8 questions above in
-# both arms at top_k=40/candidate_k=30 — 560 hits, 103,368 bytes. Captured
-# 2026-08-21 against commit 5db0925, where retrieval.py had no reranker in it at
-# all, and confirmed stable across three consecutive runs.
+# both arms at top_k=40/candidate_k=30 — 560 hits.
 #
-# If this fails, the wiring changed retrieval behaviour and chunk 5's no-rerank
-# arm is no longer comparable to the chunk 3 baseline. It is not a snapshot to
-# re-bless: regenerate it only by checking out 5db0925 and re-capturing.
-_PRE_RERANK_DIGEST = "3ffa60b311338301483eadcda96d76a0ab66836916bc84e12ec42ceac89cfa3a"
+# RE-PINNED 2026-08-31, when the vector arm moved from HNSW to exact brute-force
+# search. The previous value, 3ffa60b3…89cfa3a, was captured 2026-08-21 against
+# commit 5db0925 and cannot be regenerated any more: 5db0925's vector arm was
+# Chroma/HNSW, which no longer exists in this tree.
+#
+# What the re-pin costs, measured before it was taken (chunk 7.1g §4a): across
+# all 8 questions x 2 arms, exact and HNSW agreed on every id, every rank, every
+# membership and every RRF score — `ANY id-order difference: False`. The only
+# thing that moved was the *string* of vector_distance, on 218 of 560 hits, by
+# one float32 ULP. `_quantize_distance` now cuts that field to 9dp so a
+# last-bit representation difference cannot reach the hash; the value below is
+# the post-quantization digest under exact search, confirmed identical across
+# three separate OS processes.
+#
+# So this is still ground truth about behaviour this code did not choose — what
+# it can no longer do is prove byte-identity with a commit whose backend is
+# gone. If it fails, the wiring changed retrieval behaviour and chunk 5's
+# no-rerank arm is no longer comparable to the chunk 3 baseline. It is still not
+# a snapshot to re-bless on a whim: a failure is a finding, not a refresh.
+_PRE_RERANK_DIGEST = "03bc2840d2affc458d3adffdfcc613c0839b6ab7d14b2207439d46d1456d5e1f"
+
+
+def _quantize_distance(distance: float | None) -> str:
+    """`vector_distance` at fixed 9dp, instead of `repr()`.
+
+    `repr()` round-trips a float exactly, which is the right thing for every
+    other field here and the wrong thing for this one: it makes the digest
+    sensitive to the last bit of a float32 summation, so re-deriving the same
+    distance by a different accumulation order changes the hash while changing
+    no id, no rank, no membership and no RRF score. Under the HNSW arm 218 of
+    560 hits carried a last-bit-different distance string across runs of the
+    same code (chunk 7.1g §4a).
+
+    9dp, not fewer: measured across the 36 golden questions' top-40 lists, the
+    tightest gap between two adjacent distances is 3.58e-07 and the 1st
+    percentile is 4.01e-05, so a 1e-09 grid cannot collide two genuinely
+    different results.
+
+    It does NOT absorb float32 accumulation noise, and is not meant to: that
+    noise reaches ~6e-07 here, wider than 1e-09 and wider than the tightest
+    adjacent gap. What makes this digest reproducible is that `ExactVectorStore`
+    is bitwise deterministic (`test_vector_search_stability.py`); the
+    quantization only removes sensitivity to representation below 1e-09.
+    """
+    return "None" if distance is None else f"{distance:.9f}"
 
 
 def _serialize_pre_rerank_fields(hits: list[RetrievedChunk]) -> str:
@@ -403,7 +441,7 @@ def _serialize_pre_rerank_fields(hits: list[RetrievedChunk]) -> str:
                 repr(h.lexical_rank),
                 repr(h.lexical_score),
                 repr(h.vector_rank),
-                repr(h.vector_distance),
+                _quantize_distance(h.vector_distance),
             )
         )
         for h in hits
@@ -453,7 +491,8 @@ async def _assert_noop_matches_pre_rerank_baseline(
 
     digest = hashlib.sha256("\n".join(blocks).encode()).hexdigest()
     assert digest == _PRE_RERANK_DIGEST, (
-        f"NoOp retrieval diverged from pre-rerank commit {_PRE_RERANK_COMMIT}.\n"
+        f"NoOp retrieval diverged from the pinned pre-rerank baseline "
+        f"(lineage: commit {_PRE_RERANK_COMMIT}).\n"
         f"  expected {_PRE_RERANK_DIGEST}\n  actual   {digest}\n"
         "The wiring changed retrieval behaviour. Chunk 5's no-rerank arm is no "
         "longer a baseline until this is explained."
@@ -466,7 +505,7 @@ def _demo() -> None:
     from app.core.config import get_settings
     from app.db.session import create_engine, create_session_factory
     from app.services.embeddings import FakeEmbedder
-    from app.services.vector_store import ChromaVectorStore
+    from app.services.vector_store import ExactVectorStore
 
     # --- pure RRF math, no I/O ---
     lex = [
@@ -499,10 +538,10 @@ def _demo() -> None:
         session_factory = create_session_factory(engine)
         embedder = FakeEmbedder(dimensions=1024, model="voyage-4-lite")  # matches the real
         # collection name so we read the real, already-embedded corpus with $0 spend —
-        # a fake query vector still exercises Chroma's ANN path and the join/provenance
+        # a fake query vector still exercises the search path and the join/provenance
         # code, it just won't rank meaningfully; that's proven separately by evaluation.py
         # against the cached real query vectors.
-        vector_store = ChromaVectorStore(settings.chroma_persist_dir)
+        vector_store = ExactVectorStore()
 
         async with session_factory() as session:
             result = await retrieve(
@@ -538,8 +577,8 @@ def _demo() -> None:
     asyncio.run(run_live())
     print(
         "ok: RRF math, dedupe-by-id, determinism, a live hybrid retrieve(), and the NoOp "
-        f"path byte-identical to pre-rerank commit {_PRE_RERANK_COMMIT} across "
-        f"{len(_BASELINE_QIDS)} questions x 2 arms"
+        f"path matching the pinned pre-rerank baseline (lineage: {_PRE_RERANK_COMMIT}) "
+        f"across {len(_BASELINE_QIDS)} questions x 2 arms"
     )
 
 

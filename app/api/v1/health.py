@@ -46,15 +46,15 @@ async def ready(request: Request, response: Response) -> ReadinessResponse:
     settings: Settings = request.app.state.settings
     store: VectorStore = request.app.state.vector_store
 
-    postgres, chroma = await asyncio.gather(
+    postgres, vectors = await asyncio.gather(
         _run_check("postgres", ping(request.app.state.engine, CHECK_TIMEOUT_SECONDS)),
-        _run_check("chroma", store.check(CHECK_TIMEOUT_SECONDS)),
+        _run_check("vectors", store.check(CHECK_TIMEOUT_SECONDS)),
     )
     # Configuration presence only — calling the provider costs money. Step 02
     # replaces this with a real upstream probe.
     llm: CheckStatus = "ok" if settings.llm_api_key.get_secret_value().strip() else "error"
 
-    checks: dict[str, CheckStatus] = {"postgres": postgres, "chroma": chroma, "llm": llm}
+    checks: dict[str, CheckStatus] = {"postgres": postgres, "vectors": vectors, "llm": llm}
     healthy = all(status == "ok" for status in checks.values())
     response.status_code = 200 if healthy else 503
     return ReadinessResponse(status="ok" if healthy else "error", checks=checks)

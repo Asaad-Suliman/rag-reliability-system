@@ -391,13 +391,22 @@ gitleaks git --no-banner
 ```
 
 Several modules carry executable self-checks that assert behaviour rather than
-describe it, including a digest that pins the no-reranking retrieval path to be
-byte-identical to the implementation from before the reranker existed:
+describe it, including a digest that pins the no-reranking retrieval path
+against the implementation from before the reranker existed:
 
 ```bash
 uv run python -m app.services.retrieval
 uv run python -m app.services.evaluation
 uv run python -m app.services.reranking
+```
+
+The vector arm's cross-process determinism is checked separately, because a
+self-check inside one process structurally cannot see it — the defect it guards
+against was fixed at index-load time and varied between processes. It spawns 12
+of them and takes ~30s:
+
+```bash
+uv run python -m tests.test_vector_search_stability
 ```
 
 ---

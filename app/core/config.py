@@ -44,9 +44,6 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=5, ge=0)
     db_pool_timeout: int = Field(default=30, ge=1)
 
-    # --- chroma ---
-    chroma_persist_dir: Path = Path("data/chroma")
-
     # --- ingestion ---
     # The controlled directory parsing must stay inside — the CLI's `ingest`
     # resolves its path argument and rejects anything outside this root.
