@@ -13,6 +13,207 @@ Newest entries first.
 
 ---
 
+## 2026-08-31 — RAG Reliability System Step 03 Chunk 7.2: exact brute-force vector search replaces Chroma/HNSW; six carried claims corrected
+
+**Decision:** the vector arm is now exhaustive L2 search over a tracked 260x1024 float32 artifact
+(`app/corpus/corpus_vectors.npy` + `corpus_vectors.json`, pinned by sha256
+`dd4c3dd728f7dbb0770705f8b041444f89d86ec5d225ed30102d9f5699957100`). `ChromaVectorStore` and the
+`chromadb` dependency are **deleted**. `ExactVectorStore` fails closed — a missing file, a digest
+mismatch, a count != 260, a wrong collection, or a write attempt all raise `CorpusUnavailableError`;
+there is no silent fallback and no network on the path.
+
+**Adopted for DETERMINISM, SIMPLICITY and SPEED — explicitly NOT as a defect fix.** HNSW was not
+losing anything that mattered: the measured miss rate is **0.135%** at k=40 and no miss ever sat
+above exact-rank 15, so nothing inside the decision depth was ever dropped. What HNSW cost was
+reproducibility. All 12 gate figures, all 18 jaccards and all 949 chunk 7 leaves are unchanged, so
+the adoption cost was zero and the argument rests entirely on the three properties above.
+
+|                                       | HNSW                               | exact                       |
+| ------------------------------------- | ---------------------------------- | --------------------------- |
+| cross-process stability, 36 questions | unstable on 7                      | **36/36 bitwise identical** |
+| mean latency, k=40                    | 9.281 ms                           | **0.483 ms** (19x)          |
+| p95                                   | 16.510 ms                          | 1.105 ms                    |
+| per-process cold start                | 234.7 ms (index never checkpoints) | none                        |
+| working set                           | index dir + WAL                    | **1.0156 MiB**              |
+
+**ANN reintroduction threshold, measured not guessed: N ~= 4,000 (mean) / ~= 6,700 (p95)** with a
+Python top-k cut, or ~= 5,900 / ~= 10,300 with `argpartition`. The corpus is 260 — 15-40x headroom.
+Below that N, ANN is a pure cost. This is the number to re-check before anyone reaches for an index
+again; it is machine-bound and was measured on this host.
+
+**The distance is computed as `((M - q) ** 2).sum(axis=1)`, deliberately NOT the
+`||a||^2 - 2a.b + ||b||^2` identity.** The identity form dispatches to BLAS gemv, whose accumulation
+order varies with thread count — which is precisely the cross-process nondeterminism this change
+exists to remove. Measured: the identity form produces a different `_PRE_RERANK_DIGEST`
+(`3955f0dd...`) from the same ids and ranks. Do not "optimise" it back.
+
+---
+
+### Six carried claims, corrected. Original wording quoted; none of it deleted.
+
+**1. Miss rate: stated ~15-25%, measured 0.135%.** Wrong by a factor of ~110-185x. At the real gate
+parameter `candidate_k=30` it falls further, to **0.088%** (recall@30 = 99.912%). **Zero top-5
+misses in 720 question-runs.** The estimate that justified treating this as a correctness problem
+was never measured; when it was, the problem was two orders of magnitude smaller than the story.
+
+**2. "u03 varies at rank 3" — FALSE.** u03 is stable: one distinct signature across 20 processes at
+k=40 and at k=30, zero misses, and a top-5 **identical to exact search**
+(`YPPR8B, Q56S9B, YZN3N6, C14MJC, 59CGNK`). No miss anywhere in the corpus sits above **exact-rank
+15**. The claim both named the wrong question and asserted a depth that does not occur.
+
+**3. The unstable set is `a02 a03 a15 a34 u02 u05 u06` — measured at 20 draws, and NOT exhaustive.**
+The earlier handoff named `a03/a15/u02/u03`: three of four correct, `u03` wrong (see 2), and
+`a02 a34 u05 u06` omitted entirely. It understated the blast radius _and_ overstated its depth.
+
+**This set must not be stated as closed.** HNSW instability is probabilistic per process, so any
+finite sample under-counts. Recorded because it happened: a 12-process control flagged an **eighth**
+question, `u04`, which a second 12-process run then measured **stable (1 signature, 12/12)** — and
+that second run showed only 5 of the 7 varying. `u04` was therefore **rejected as a 12-draw sampling
+artifact, not accepted as an eighth member**. The corollary is the honest one: 12 draws is not
+enough to enumerate the set, and 20 may not be either. **NOT ESTABLISHED: the complete membership.**
+Nothing depends on it — the shipped test asserts stability, it does not enumerate instability.
+
+**4. The gate metric is recall@30, not recall@20.** Read off the code:
+`app/services/evaluation.py:38`, `RECALL_KS = (5, 10, 30)`; `arm_tuple()` composes
+`(recall@5, recall@10, recall@30, mrr@10)`. Every "recall@20" reference in the carried notes is a
+metric this project has never computed.
+
+**5. `pre_rerank_pool_overlap` covers the 6 unanswerable questions, not 36.** Source:
+`scripts/chunk5_benchmark.py`, `near_misses = [e for e in entries if not e.answerable]` — u01-u06,
+3 arm-pairs each = **18 figures**. There is no per-question overlap record for the 30 answerable
+questions, so any claim about "the 36-question overlap" refers to something that does not exist.
+
+**6. The `16bcd06` carry-in understated the nondeterminism twice.** Original text, from
+`docs/chunk7-scores.json` `manifest.measurement_choices.pool_nondeterminism` and the commit message
+(both left unedited — they are measurement records with their own provenance):
+
+> "the Chroma vector pool's **30th (candidate_k boundary) result** is not stable across processes"
+>
+> "a03's displacer list is **one sample of two orderings**"
+
+Both understate it:
+
+- **Not the boundary.** Missed exact-ranks across 20 processes at k=40 were **15, 19, 20, 24, 38,
+  39, 40**; at `candidate_k=30` they were **15, 19, 20, 24**. The instability sits _inside_ the pool,
+  not at its edge. Calling it a boundary effect made it sound like an artifact of where the cut
+  falls; it is not.
+- **More than two orderings.** `a03` does have 2 distinct signatures at k=40 (confirmed
+  independently this pass), so that number was right _for a03_ — but `u02` has **5-6** across
+  separate 20- and 12-process samples, and `u05` has 3. The understatement is that a03's two
+  orderings were treated as characterising the phenomenon.
+- **NOT ESTABLISHED:** a specific "three orderings at k=40" figure carried in the chunk 7.2 brief.
+  This pass measured 2 for a03 and up to 6 for u02, and could not reproduce a 3. Recorded as
+  unverified rather than repeated.
+
+---
+
+### Three further corrections found while doing the work
+
+**7. `evaluation.py`'s "unrebuildable" claim was FALSE on both halves — and is fixed in code.**
+Original comment above `GATE_FIGURES`:
+
+> "The corpus is do-not-re-embed and unrebuildable — **the source PDF is gone and canonical text was
+> never persisted**"
+
+Verified this pass: the source PDF **is present** and its sha256 matches `documents.sha256` byte for
+byte (`f6582a5529e8...0af7`, 18,537,673 bytes both), and the canonical text **is persisted** in
+Postgres `chunks.text`, 260 rows. The corpus is **expensive** to rebuild — it costs a Voyage
+re-embed — **not unrebuildable**. The comment is corrected in place; this entry records that it was
+wrong and for how long. Three independent recovery paths now exist: the tracked `.npy` itself, the
+PDF, and Postgres.
+
+**8. `_PRE_RERANK_DIGEST` re-pinned, and the old value can never be regenerated.**
+`3ffa60b3...89cfa3a` -> `03bc2840d2affc458d3adffdfcc613c0839b6ab7d14b2207439d46d1456d5e1f`. The old
+comment instructed "regenerate it only by checking out 5db0925 and re-capturing" — **that
+instruction is now impossible**, because 5db0925's vector arm was Chroma/HNSW and no longer exists
+in this tree. What was measured before re-pinning: identical ids, ranks, membership and RRF scores
+on all 8 baseline questions x 2 arms (`ANY id-order difference: False`); only the _string_ of
+`vector_distance` moved, on 218 of 560 hits, by one float32 ULP.
+
+**chunk 7.1g's `24885caf5c198313...` is NOT a valid expected value for anything.** This pass's exact
+implementation produces `5e72ec7e4a18b0ff...` for the same un-quantized serialization — same ids,
+same ranks, different accumulation order. **Two correct exact implementations differ by ~2 float32
+ULP.** Any future digest must be re-derived from the implementation in the tree, never copied from a
+pass report.
+
+**9. What the 9dp quantization does and does not do — stated plainly, because the obvious reading is
+wrong.** `_quantize_distance` cuts `vector_distance` to 9dp before hashing. It removes sensitivity to
+representation **below 1e-09 only**. It does **NOT** absorb float32 accumulation noise, which reaches
+**~6e-07** here — wider than the grid and wider than the tightest adjacent distance gap
+(3.58e-07 measured; 1st percentile 4.01e-05 across the 36 top-40 lists). Three exact searches
+agreeing on every id and rank still produce three different digests (float32 `03bc2840`, float64
+`6b773af8`, BLAS-identity `3955f0dd`).
+
+> **The digest is reproducible because `ExactVectorStore` is bitwise deterministic, not because the
+> field is quantized.** Anyone who reads the quantization as the source of reproducibility will
+> re-introduce a BLAS path and be surprised.
+
+---
+
+### Verification, and what was deliberately left alone
+
+**The cross-process test is real, and that was demonstrated rather than asserted.**
+`tests/test_vector_search_stability.py` spawns **12 separate OS processes** — not an in-process loop,
+which is structurally blind here because the old defect was fixed at index-load time — and asserts
+bitwise-identical `(id, rank, distance.hex())` for **all 36 questions at k=40**, naming
+`a02 a03 a15 a34 u02 u05 u06` individually in its output. Pointed at the old Chroma/HNSW path it
+**fails and exits 1**, flagging all seven. That negative control is not shipped (it would re-import
+the deleted dependency); the `_build_store()` seam that made it a 30-line external file stays.
+
+**The digest gate's blind spot, now measured.** `_BASELINE_QIDS` is
+`a01 a05 a09 a13 a17 a21 a25 u01`; the unstable set is `a02 a03 a15 a34 u02 u05 u06`. Across the same
+12 HNSW processes: **`BASELINE qids unstable: 0/8`, overlap with the unstable set: `[]`**. The two
+sets are **disjoint**, so `_PRE_RERANK_DIGEST` could not have caught this on any run — which is
+exactly why it never did. A gate whose fixture excludes every unstable case is not a gate for that
+property.
+
+**The 10-leaf `docs/chunk7-scores.json` drift is PRE-EXISTING and was left alone.** Not inherited as
+a claim — re-verified this pass by running the script under both backends:
+
+```
+exact vs committed : 10 differing leaves
+hnsw  vs committed : 10 differing leaves
+exact vs hnsw      :  0 differing leaves     <- this change's own effect
+same leaf set? True
+```
+
+**It is ONE event, not eight.** Every one of the 7 `percentile_in_c_non_gold` shifts is exactly
+`1/128 = 0.0078125` — one element of the 128-member non-gold population crossing a rank boundary —
+and the same crossing moves the population-c median (-6.119887 -> -6.143766) at its 3 recording
+sites. The committed artifact records `git.head = d574409` with `dirty: true` against a current HEAD
+of `16bcd06`, so it was generated from a dirty tree one commit back. Out of scope, not chased, file
+not regenerated.
+
+**Build determinism was unreachable in `chromadb 1.5.9` — CARRIED, NOT RE-VERIFIED.** The finding
+that 5 rebuilds under every public knob pinned produced 5 distinct graphs, and that
+`RAYON_NUM_THREADS` is genuinely read (17 -> 10 workers at `=1`) while `OMP_NUM_THREADS` was never
+shown connected to anything, comes from passes **chunk71e and chunk71f, which no longer exist** (see
+below). It is recorded because it is load-bearing for "why not just fix HNSW", and flagged because
+this pass could not re-run it: `chromadb` is uninstalled as of this entry, so re-verifying would
+require re-adding the dependency being removed. **The important half of it is the epistemics, and
+that half is safe to keep:** the earlier "no process correlate" conclusion was drawn from
+`OMP_NUM_THREADS`, a variable never verified to be connected to anything — a negative result about
+an unconnected knob is not a negative result about the system.
+
+**Pass reports `chunk71e` and `chunk71f` were lost to a `/tmp` clear** and no rebuild path for them
+exists anywhere. Their load-bearing conclusions survive only via **chunk 7.1g's independent
+re-verification**, which re-derived the unstable set empirically rather than trusting the carried
+list — and in doing so caught corrections 2 and 3 above. That report is saved outside `/tmp`, at
+`DevBrain/rag-reliability/passes/chunk71g-REPORT.md`. **The lesson is procedural: a pass whose only
+artifact lives in `/tmp` has not been recorded.**
+
+**Cross-references.** Supersedes the vector-backend half of **2026-08-19 — "Step 02 Chunk 5: hybrid
+retrieval fused with RRF"** (RRF, `RRF_K=5` and the MRR regression are untouched; only the store
+behind the vector arm changed). Corrects the `pool_nondeterminism` record in `docs/chunk7-scores.json`
+and commit `16bcd06`, both left unedited. Leaves **2026-08-23 — "the chunk 5 block is VOID"** and
+**2026-08-23 — "DoD #5 answered, SPLIT verdict"** intact: all 12 gate figures and all 18 jaccards
+reproduce exactly, so nothing those entries rest on moved. The 7.1 conclusion — reranker score does
+not track groundedness, 7.2 still blocked — **HOLDS** under exact search with every true neighbour
+present: 26/30 gold and 124/128 non-gold still fall inside the shared region [-10.745, +1.690] and
+the stop condition still fires **both** low and high.
+
+---
+
 ## 2026-08-25 — RAG Reliability System Step 03 Chunk 7 Phase E: `HeuristicCharCounter` demoted, `TiktokenCounter` is now the budget-safety mechanism
 
 **Decision:** `app/services/context_budget.py` gains `TiktokenCounter` (exact tiktoken `cl100k_base`
@@ -1267,6 +1468,8 @@ touching retrieval code.
 ---
 
 ## 2026-08-19 — RAG Reliability System Step 02 Chunk 5: hybrid retrieval fused with RRF, k tuned to 5, MRR regression documented not fixed
+
+> **PARTIALLY SUPERSEDED — see 2026-08-31 — "Step 03 Chunk 7.2: exact brute-force vector search replaces Chroma/HNSW; six carried claims corrected".** The vector arm's *backend* changed (Chroma/HNSW -> exact brute-force search over a tracked artifact); RRF itself, `RRF_K = 5`, the dedupe-by-chunk_id rule and the recorded MRR regression are **unchanged and still stand** — all 12 gate figures reproduce exactly under the new backend. Annotation only; the entry below is unchanged.
 
 **Decision:** `app/services/retrieval.py` fuses Postgres FTS (`content_tsv` + `ts_rank_cd`) and
 Chroma vector search by Reciprocal Rank Fusion, deduped by `chunk_id` only (never by span overlap
