@@ -41,7 +41,7 @@ from app.services.ingestion import (
 )
 from app.services.reranking import RERANK_N, Reranker, RerankerBackend, build_reranker
 from app.services.retrieval import DEFAULT_CANDIDATE_K, DEFAULT_TOP_K, RRF_K, retrieve
-from app.services.vector_store import ChromaVectorStore, VectorStore
+from app.services.vector_store import ExactVectorStore, VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ TERMINAL_FAILURE_STATUSES = ("failed", "quarantined")
 
 
 class UnavailableError(RuntimeError):
-    """Postgres or Chroma didn't answer within CHECK_TIMEOUT_SECONDS."""
+    """Postgres or the vector corpus didn't answer within CHECK_TIMEOUT_SECONDS."""
 
 
 def _build_reranker(settings: Settings, choice: RerankerBackend) -> Reranker:
@@ -113,7 +113,7 @@ def _check_path_allowed(path: Path, settings: Settings) -> Path:
 
 
 async def _preflight(engine: AsyncEngine, vector_store: VectorStore) -> None:
-    """Postgres + Chroma reachability, reusing the exact calls
+    """Postgres + vector-corpus reachability, reusing the exact calls
     `/health/ready` makes — not `/health/ready` itself, since importing
     `app.api.v1.health` would drag in FastAPI for a CLI that never runs it.
     """
@@ -213,9 +213,9 @@ def _no_hits_message(
     never render as the same line — that was the defect this replaces.
 
     Which store's emptiness counts is decided by the arm, because the arms read
-    different stores: lexical reads Postgres and never touches Chroma, vector is
-    the mirror. Reporting Chroma's state on a lexical run would be reporting
-    something that run never depended on.
+    different stores: lexical reads Postgres and never touches the vector
+    corpus, vector is the mirror. Reporting the corpus's state on a lexical run
+    would be reporting something that run never depended on.
 
     Hybrid with exactly one store populated is a third case, not a variant of
     empty: the query silently ran on one arm. That is a degraded result rather
@@ -223,9 +223,9 @@ def _no_hits_message(
     instead of degrading quietly.
     """
     reads_postgres = arm in ("hybrid", "lexical")
-    reads_chroma = arm in ("hybrid", "vector")
+    reads_vectors = arm in ("hybrid", "vector")
     store_missing = (reads_postgres and not chunks_present) or (
-        reads_chroma and not vectors_present
+        reads_vectors and not vectors_present
     )
 
     if not store_missing:
@@ -241,7 +241,7 @@ def _no_hits_message(
 
     if chunks_present and not vectors_present:
         return (
-            f"postgres has chunks but the Chroma collection {collection_name} is empty. "
+            f"postgres has chunks but the vector corpus {collection_name} is empty. "
             "Most likely VOYAGE_MODEL or VOYAGE_DIMENSIONS changed — collections are per "
             "model and dimensions, so the corpus needs re-embedding under the new one. "
             "Otherwise an interrupted delete or reindex; run `app.cli stats`.",
@@ -249,7 +249,7 @@ def _no_hits_message(
         )
 
     return (
-        f"the Chroma collection {collection_name} has vectors but postgres has no chunks — "
+        f"the vector corpus {collection_name} has vectors but postgres has no chunks — "
         "an interrupted ingest left vectors without their rows. Run `app.cli stats`.",
         True,
     )
@@ -394,7 +394,7 @@ async def _cmd_stats(
 
     total_vectors = await vector_store.count(collection_name)
 
-    # Consistency check: per document, Postgres chunk_count vs. actual Chroma
+    # Consistency check: per document, Postgres chunk_count vs. actual
     # vector count. Catches the interrupted-delete/reindex half-state — a
     # document row that still says status=ready, chunk_count=N, but whose
     # vectors are gone because the process died between the two deletes in
@@ -402,9 +402,9 @@ async def _cmd_stats(
     # nothing else in this CLI would ever notice.
     #
     # Restricted to terminal statuses (ready/failed/quarantined) on purpose:
-    # the Postgres and Chroma reads here aren't a snapshot — they're two
+    # the Postgres and vector reads here aren't a snapshot — they're two
     # separate queries at two separate instants — and a document actively
-    # mid-pipeline (queued/parsing/indexing) can genuinely have Chroma
+    # mid-pipeline (queued/parsing/indexing) can genuinely have vectors
     # already upserted while Postgres's chunk_count commit hasn't landed
     # yet (ingestion.py writes vectors before the final commit). Comparing
     # those would flag real, harmless in-flight state as corruption. A
@@ -425,7 +425,7 @@ async def _cmd_stats(
     for status in sorted(status_counts):
         print(f"  {status}: {status_counts[status]}")
     print(f"chunks (postgres): {total_chunks}")
-    print(f"vectors (chroma, collection={collection_name}): {total_vectors}")
+    print(f"vectors (collection={collection_name}): {total_vectors}")
 
     if in_progress:
         print(f"({in_progress} document(s) mid-pipeline — not checked for consistency)")
@@ -436,7 +436,7 @@ async def _cmd_stats(
         for doc_id, filename, pg_count, actual in mismatches:
             print(
                 f"  WARNING: {doc_id} ({filename}): postgres chunk_count={pg_count}, "
-                f"chroma vectors={actual} — likely an interrupted delete or reindex"
+                f"vectors={actual} — likely an interrupted delete or reindex"
             )
     return EXIT_OK
 
@@ -557,7 +557,7 @@ async def _dispatch(args: argparse.Namespace, settings: Settings) -> int:
     # SettingsError rather than an uncaught traceback.
     try:
         engine = create_engine(settings)
-        vector_store = ChromaVectorStore(settings.chroma_persist_dir)
+        vector_store = ExactVectorStore()
     except Exception as exc:
         raise UnavailableError(str(exc)) from exc
 
@@ -603,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _demo() -> None:
-    """Offline truth table for the no-hits branch. No Postgres, no Chroma.
+    """Offline truth table for the no-hits branch. No Postgres, no vector corpus.
 
     Not reachable via `python -m app.cli` — that entry point is the CLI itself
     and requires a subcommand. Run it as:
@@ -633,16 +633,16 @@ def _demo() -> None:
         assert "app.cli ingest" in message, message
 
     # --- half-states: the arm decides whether the missing store matters ---
-    # Postgres populated, Chroma empty.
+    # Postgres populated, vector corpus empty.
     message, refused = check("lexical", True, False)
-    assert not refused, message  # lexical never reads Chroma
+    assert not refused, message  # lexical never reads the vector corpus
     message, refused = check("vector", True, False)
     assert refused and collection in message, message
     assert "VOYAGE_MODEL" in message, message  # the likely cause, not "corpus is empty"
     message, refused = check("hybrid", True, False)
     assert refused and "VOYAGE_MODEL" in message, message
 
-    # Chroma populated, Postgres empty — the mirror, and a different message.
+    # Vector corpus populated, Postgres empty — the mirror, and a different message.
     message, refused = check("vector", False, True)
     assert not refused, message  # vector never reads Postgres
     message, refused = check("lexical", False, True)

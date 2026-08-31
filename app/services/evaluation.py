@@ -368,10 +368,17 @@ class EvaluationReport:
 # MRR_DEPTH above). Those numbers are a different key and must not be gated on.
 #
 # A mismatch is evidence that the corpus or the index moved under the benchmark,
-# NOT a threshold to re-bless. The corpus is do-not-re-embed and unrebuildable —
-# the source PDF is gone and canonical text was never persisted — so a moved
-# figure means the one irreplaceable input changed. Explain it before this dict
-# is touched.
+# NOT a threshold to re-bless. The corpus is do-not-re-embed: rebuilding it means
+# paying Voyage to re-embed 260 chunks, and every figure in this file was
+# measured against the vectors that exist now. Explain a moved figure before this
+# dict is touched.
+#
+# It is expensive to rebuild, NOT unrebuildable — this comment used to claim "the
+# source PDF is gone and canonical text was never persisted" and both halves were
+# false (chunk 7.2, DECISIONS.md 2026-08-31). Verified: the source PDF is present
+# and its sha256 matches `documents.sha256` byte for byte, the canonical text is
+# persisted in Postgres `chunks.text` (260 rows), and the vectors themselves are
+# now a tracked artifact at `app/corpus/` pinned by sha256.
 GATE_FIGURES: dict[str, tuple[str, str, str, str]] = {
     "lexical": ("0.233", "0.400", "0.567", "0.142"),
     "vector": ("0.833", "0.900", "1.000", "0.700"),

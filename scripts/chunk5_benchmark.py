@@ -72,7 +72,7 @@ from app.services.evaluation import (
 from app.services.ingestion import collection_name_for, sha256_file
 from app.services.reranking import NOOP_RERANKER, RERANK_N, Reranker
 from app.services.retrieval import DEFAULT_CANDIDATE_K, retrieve
-from app.services.vector_store import ChromaVectorStore, VectorStore
+from app.services.vector_store import ExactVectorStore, VectorStore
 
 DEFAULT_OUT = Path("docs/chunk5-results.json")
 METRIC_LABELS = ("recall@5", "recall@10", "recall@30", "mrr@10")
@@ -365,7 +365,7 @@ async def main() -> int:
     settings = get_settings()
     embedder = _build_embedder(settings)
     engine = create_engine(settings)
-    vector_store = ChromaVectorStore(settings.chroma_persist_dir)
+    vector_store = ExactVectorStore()
     session_factory = create_session_factory(engine)
 
     reranker: Reranker | None = None
@@ -404,7 +404,11 @@ async def main() -> int:
             overlap: dict[str, Any] = {}
             pools_by_id: dict[str, dict[str, list[str]]] = {}
             for entry in near_misses:
-                pools = {
+                # Annotated, not inferred: iterating ARMS gives the comprehension
+                # Literal keys, and dict is invariant in its key type, so the
+                # inferred dict[Literal[...], ...] will not assign into
+                # pools_by_id's dict[str, ...].
+                pools: dict[str, list[str]] = {
                     arm: await _pool(
                         entry.question, vectors[entry.id], arm, session, vector_store, embedder
                     )

@@ -89,7 +89,7 @@ class RerankError(RuntimeError):
 class RerankerModelMissing(RerankError):
     """A weight file is absent, unreadable, or does not match the manifest.
 
-    Fatal at startup rather than per-request. Unlike Postgres or Chroma being
+    Fatal at startup rather than per-request. Unlike Postgres or the vector store being
     unreachable — transient, external, and the reason `/health/ready` exists —
     a missing baked-in weight is a build defect that will never fix itself.
     """
@@ -299,7 +299,7 @@ class LocalOnnxReranker:
     """int8 ONNX cross-encoder, loaded once per process.
 
     Constructed at startup (`main.py`'s lifespan / `cli.py`'s `_dispatch`),
-    beside `ChromaVectorStore`, and injected as a parameter — never imported as
+    beside the vector store, and injected as a parameter — never imported as
     a module global and never built inside `retrieve()`.
     """
 
@@ -350,7 +350,7 @@ class LocalOnnxReranker:
         # loop, so concurrent requests would race on that shared state.
         self._length_probe = Tokenizer.from_file(str(model_dir / TOKENIZER_FILENAME))
 
-        # Dedicated and bounded. `vector_store.py` routes every Chroma call
+        # Dedicated and bounded. `vector_store.py` routes every blocking store call
         # through asyncio's shared default pool; a rerank is seconds of solid
         # CPU and would stall those reads if it queued there too. max_workers=1
         # also makes the total thread budget knowable: 1 x intra_op.

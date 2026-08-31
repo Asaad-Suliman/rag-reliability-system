@@ -63,7 +63,7 @@ from app.services.evaluation import (
 )
 from app.services.reranking import NOOP_RERANKER, RERANK_N, Reranker
 from app.services.retrieval import DEFAULT_CANDIDATE_K, RetrievedChunk, retrieve
-from app.services.vector_store import ChromaVectorStore, VectorStore
+from app.services.vector_store import ExactVectorStore, VectorStore
 
 # Reused rather than reimplemented: one manifest convention for the repo, and a second copy is a
 # second thing to drift. `_manifest` needs an EvaluationReport, which the gate pass below produces.
@@ -646,7 +646,7 @@ async def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     embedder = _build_embedder(settings)
     engine = create_engine(settings)
-    vector_store = ChromaVectorStore(settings.chroma_persist_dir)
+    vector_store = ExactVectorStore()
     session_factory = create_session_factory(engine)
     reranker: Reranker | None = None
 

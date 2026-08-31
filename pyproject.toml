@@ -10,14 +10,15 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.36",
     "asyncpg>=0.30",
     "alembic>=1.14",
-    "chromadb>=0.5.20",
     "pypdf>=6.16.1",
     "python-docx>=1.2.0",
     "httpx>=0.28.1",
-    # Reranker (app/services/reranking.py). All three already arrived as
-    # transitive deps of chromadb; declared here because this app imports them
-    # directly, and a core component must not rely on another package's
-    # dependency graph continuing to include it.
+    # Reranker (app/services/reranking.py), and numpy for the vector store.
+    # All three once arrived as transitive deps of chromadb and were declared
+    # here anyway, because a core component must not rely on another package's
+    # dependency graph continuing to include it. chromadb was dropped in
+    # chunk 7.2 when exact search replaced the HNSW arm; these three kept
+    # resolving, which is exactly what that reasoning was insuring against.
     #
     # onnxruntime is pinned exactly, not floated. reranking.py's negative
     # control asserts a property of ORT's *dynamic quantization* — that batch
@@ -59,7 +60,21 @@ select = ["E", "F", "I", "B", "UP"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-files = ["app"]
+
+# `app` alone was a partial surface, and the gate was green because of what it
+# did not look at: scripts/ produces the committed measurement artifacts
+# (docs/chunk5-results.json, docs/chunk7-scores.json) and the gate that guards
+# them, and it went unchecked from the day this config was written. Widening it
+# cost one real fix (chunk5_benchmark.py, an invariant dict key). tests/ is in
+# for the same reason — test_vector_search_stability.py is a regression guard,
+# not scratch.
+files = ["app", "scripts", "tests"]
+
+# scripts/ is a namespace package (no __init__.py) run as `python -m
+# scripts.<name>`. Without this, mypy resolves the same file under two module
+# names and refuses to check anything at all.
+explicit_package_bases = true
+mypy_path = "."
 
 # onnxruntime ships no py.typed marker. Scoped to that one module so `strict`
 # still covers everything else — reranking.py's own signatures stay checked,

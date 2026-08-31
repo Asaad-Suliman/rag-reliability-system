@@ -5,7 +5,7 @@ but persists every transition, so moving it off the request path later
 touches no logic here.
 
 Cost discipline: every chunk in a document is embedded before anything is
-written to Postgres or Chroma, so a document is never visible half-indexed.
+written to Postgres or the vector store, so a document is never visible half-indexed.
 The tradeoff: if the embedder fails partway through, nothing is checkpointed,
 so retrying re-embeds the whole document — including whatever portion already
 succeeded and was already billed for. At this project's token volumes (cents
@@ -47,7 +47,7 @@ class NetworkNotAllowedError(RuntimeError):
 
 
 def collection_name_for(embedder: Embedder) -> str:
-    """One Chroma collection per (model, dimensions) pair, so switching
+    """One collection per (model, dimensions) pair, so switching
     embedding models can never silently mix incompatible vector spaces.
     """
     slug = embedder.model.replace("-", "").replace(".", "")
@@ -206,7 +206,7 @@ async def ingest_document(
 
     # Gate placed here deliberately, before the delete below: refusing after
     # the delete would have already destroyed real chunks/vectors with no way
-    # to roll back (Chroma has no transactional link to this session). A
+    # to roll back (the vector store has no transactional link to this session). A
     # refusal here touches nothing that already existed.
     if not allow_network:
         raise NetworkNotAllowedError(
@@ -299,7 +299,7 @@ def _demo() -> None:
     from app.db.models import User
     from app.db.session import create_engine, create_session_factory
     from app.services.embeddings import FakeEmbedder
-    from app.services.vector_store import ChromaVectorStore
+    from app.services.vector_store import InMemoryVectorStore
 
     corpus = Path("/home/asaad/Downloads/Mastering RAG 2026_compressed.pdf")
     assert corpus.exists(), f"self-check requires the corpus fixture at {corpus}"
@@ -310,109 +310,106 @@ def _demo() -> None:
         session_factory = create_session_factory(engine)
         embedder = FakeEmbedder(dimensions=8)  # small: this checks the pipeline, not vector quality
 
-        with tempfile.TemporaryDirectory() as chroma_dir:
-            vector_store = ChromaVectorStore(Path(chroma_dir))
-            collection_name = collection_name_for(embedder)
+        vector_store = InMemoryVectorStore()
+        collection_name = collection_name_for(embedder)
 
-            async with session_factory() as session:
-                user = User(email="ingestion-selfcheck@test.local", password_hash="x")
-                session.add(user)
-                await session.flush()
-                user_id = user.id
+        async with session_factory() as session:
+            user = User(email="ingestion-selfcheck@test.local", password_hash="x")
+            session.add(user)
+            await session.flush()
+            user_id = user.id
 
+            try:
+                doc = await ingest_document(
+                    corpus,
+                    corpus.name,
+                    user_id,
+                    session,
+                    vector_store,
+                    embedder,
+                    allow_network=True,
+                )
+                assert doc.status == "ready", doc.error
+                assert doc.chunk_count > 0
+                assert doc.page_count == 247
+
+                rows = (
+                    (await session.execute(select(Chunk).where(Chunk.document_id == doc.id)))
+                    .scalars()
+                    .all()
+                )
+                assert len(rows) == doc.chunk_count
+                assert all(r.vector_id == r.id for r in rows)
+
+                vector_count = await vector_store.count(collection_name)
+                assert vector_count == doc.chunk_count, (vector_count, doc.chunk_count)
+
+                # Per-document count matches too -- the CLI's `stats` consistency
+                # check compares exactly this against Postgres chunk_count.
+                per_doc_count = await vector_store.count_by_document(collection_name, doc.id)
+                assert per_doc_count == doc.chunk_count, (per_doc_count, doc.chunk_count)
+
+                # Re-ingest the same bytes: dedupe, same document, no new rows.
+                doc2 = await ingest_document(
+                    corpus, corpus.name, user_id, session, vector_store, embedder
+                )
+                assert doc2.id == doc.id
+                assert doc2.status == "ready"
+
+                deleted = await delete_document(doc, session, vector_store, embedder)
+                assert deleted == doc.chunk_count
+                remaining = (
+                    (await session.execute(select(Chunk).where(Chunk.document_id == doc.id)))
+                    .scalars()
+                    .all()
+                )
+                assert remaining == []
+                assert await vector_store.count(collection_name) == 0
+                assert await vector_store.count_by_document(collection_name, doc.id) == 0
+
+                # Network gate: a document needing embedding must refuse
+                # without allow_network=True, and touch nothing when it does.
+                fd, gate_check_name = tempfile.mkstemp(suffix=".txt")
+                os.close(fd)
+                gate_check_path = Path(gate_check_name)
+                gate_check_path.write_text("Content that will need embedding once chunked.")
                 try:
-                    doc = await ingest_document(
-                        corpus,
-                        corpus.name,
-                        user_id,
-                        session,
-                        vector_store,
-                        embedder,
-                        allow_network=True,
-                    )
-                    assert doc.status == "ready", doc.error
-                    assert doc.chunk_count > 0
-                    assert doc.page_count == 247
-
-                    rows = (
-                        (await session.execute(select(Chunk).where(Chunk.document_id == doc.id)))
-                        .scalars()
-                        .all()
-                    )
-                    assert len(rows) == doc.chunk_count
-                    assert all(r.vector_id == r.id for r in rows)
-
-                    vector_count = await vector_store.count(collection_name)
-                    assert vector_count == doc.chunk_count, (vector_count, doc.chunk_count)
-
-                    # Per-document count matches too -- the CLI's `stats` consistency
-                    # check compares exactly this against Postgres chunk_count.
-                    per_doc_count = await vector_store.count_by_document(collection_name, doc.id)
-                    assert per_doc_count == doc.chunk_count, (per_doc_count, doc.chunk_count)
-
-                    # Re-ingest the same bytes: dedupe, same document, no new rows.
-                    doc2 = await ingest_document(
-                        corpus, corpus.name, user_id, session, vector_store, embedder
-                    )
-                    assert doc2.id == doc.id
-                    assert doc2.status == "ready"
-
-                    deleted = await delete_document(doc, session, vector_store, embedder)
-                    assert deleted == doc.chunk_count
-                    remaining = (
-                        (await session.execute(select(Chunk).where(Chunk.document_id == doc.id)))
-                        .scalars()
-                        .all()
-                    )
-                    assert remaining == []
-                    assert await vector_store.count(collection_name) == 0
-                    assert await vector_store.count_by_document(collection_name, doc.id) == 0
-
-                    # Network gate: a document needing embedding must refuse
-                    # without allow_network=True, and touch nothing when it does.
-                    fd, gate_check_name = tempfile.mkstemp(suffix=".txt")
-                    os.close(fd)
-                    gate_check_path = Path(gate_check_name)
-                    gate_check_path.write_text("Content that will need embedding once chunked.")
+                    raised = False
                     try:
-                        raised = False
-                        try:
-                            await ingest_document(
-                                gate_check_path,
-                                "network-gate-check.txt",
-                                user_id,
-                                session,
-                                vector_store,
-                                embedder,
-                            )
-                        except NetworkNotAllowedError:
-                            raised = True
-                        assert raised, "expected NetworkNotAllowedError without allow_network=True"
-
-                        gated_doc = (
-                            await session.execute(
-                                select(Document).where(
-                                    Document.filename == "network-gate-check.txt"
-                                )
-                            )
-                        ).scalar_one()
-                        assert gated_doc.status == "indexing", gated_doc.status
-                        assert gated_doc.chunk_count == 0
-                        gated_chunks = (
-                            (
-                                await session.execute(
-                                    select(Chunk).where(Chunk.document_id == gated_doc.id)
-                                )
-                            )
-                            .scalars()
-                            .all()
+                        await ingest_document(
+                            gate_check_path,
+                            "network-gate-check.txt",
+                            user_id,
+                            session,
+                            vector_store,
+                            embedder,
                         )
-                        assert gated_chunks == [], "a refused ingest must not write any chunks"
-                    finally:
-                        gate_check_path.unlink(missing_ok=True)
+                    except NetworkNotAllowedError:
+                        raised = True
+                    assert raised, "expected NetworkNotAllowedError without allow_network=True"
+
+                    gated_doc = (
+                        await session.execute(
+                            select(Document).where(Document.filename == "network-gate-check.txt")
+                        )
+                    ).scalar_one()
+                    assert gated_doc.status == "indexing", gated_doc.status
+                    assert gated_doc.chunk_count == 0
+                    gated_chunks = (
+                        (
+                            await session.execute(
+                                select(Chunk).where(Chunk.document_id == gated_doc.id)
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    assert gated_chunks == [], "a refused ingest must not write any chunks"
                 finally:
-                    await session.execute(delete(User).where(User.id == user_id))
-                    await session.commit()
+                    gate_check_path.unlink(missing_ok=True)
+            finally:
+                await session.execute(delete(User).where(User.id == user_id))
+                await session.commit()
 
         await engine.dispose()
         print(
