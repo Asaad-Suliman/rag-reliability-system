@@ -13,6 +13,401 @@ Newest entries first.
 
 ---
 
+## 2026-09-03 — PRE-REGISTRATION: the abstain mechanism set — TRIAGE ONLY, OOD-first, and classes 3 and 4 stay SPLIT
+
+**Decision:** an additive artifact, the **abstain mechanism set**
+(`abstain_mechanisms`), is pre-registered here — its purpose, its seven
+mechanism classes, its per-family directional predictions, its gate order, and
+the constraints binding it — **before any probe question is authored and before
+any vector is embedded.** No probe text exists yet. No per-class n exists yet
+for classes 2–7.
+
+**SCOPE — MECHANISM TRIAGE ONLY. This artifact cannot be used to fit a
+threshold, and no later reader may repurpose it as one.** Its entire job is to
+answer three coarse questions per mechanism class: *is the class separable from
+answerable at all*, *in which direction*, and *roughly how large is the effect*.
+It is not a validation set, not a calibration set, not a held-out set, and not a
+source of any number that gets written into Guardrail code. A signal that
+triages well here is still "survives screening, UNVALIDATED" and still owes the
+same evidence every 7.3 survivor owes. **If a future pass wants a threshold, it
+must build a separate set for that purpose; reusing this one is threshold
+fitting on triage data and is prohibited.**
+
+**The root finding this answers: golden set v3's six unanswerables are six
+instances of one recipe, not a sample of unanswerability.** All six were
+authored to the same specification — *share vocabulary with the corpus* — and
+that single authoring choice is what two of chunk 7.3's findings turn on. See
+`docs/DECISIONS.md` **"2026-09-02 — Chunk 7.3: IDF-weighted rare-term absence
+measures PARAPHRASE DISTANCE, not unanswerability"**, which records that a
+rare-term-absence detector *structurally cannot fire* on items engineered for
+vocabulary overlap; and **"2026-09-02 — Chunk 7.3: perturbation stability is
+INVERTED — unanswerable queries sit in MORE stable neighbourhoods"**, which
+records that a near-miss is by construction a query landing in dense,
+well-supported corpus territory. Both refutations are *scoped to what a near-miss
+is*. Neither tells us anything about a question that is unanswerable for a
+different reason. **Six items of one recipe is a measurement of that recipe, not
+of the concept.** Chunk 7.3's negatives stand as run and are not reopened by this
+entry; what is reopened is only the question of whether they generalise past the
+recipe.
+
+---
+
+### The seven mechanism classes
+
+Each class is defined by **why the answer is unavailable**, not by surface form.
+The `differs from` column is the discriminating question a later author must be
+able to answer for every item.
+
+| # | Class | Definition | Why the answer is unavailable | Differs from its nearest neighbour |
+|---|---|---|---|---|
+| **1** | **out-of-domain** | The question's subject matter is outside the corpus's subject entirely. | The corpus never discusses this domain; no chunk is even topically relevant. | vs **5**: 1 is a different *subject*; 5 is the right subject at a depth or facet the document does not cover. |
+| **2** | **in-domain entity-absent** (= the v3 recipe) | Right subject, right vocabulary, but the specific entity/fact asked for is not in the corpus. | The corpus covers the neighbourhood densely and this particular item is simply not in it. | vs **1**: 2's vocabulary is shared with the corpus by construction; retrieval returns confident, topically-correct, wrong chunks. |
+| **3** | **multi-chunk synthesis unsupported** | The answer would require combining facts across chunks in a way the corpus does not license (a comparison, total, or derivation whose inputs are not all present or not commensurable). | Every *individual* retrieved chunk is relevant and correct; the **aggregation** is what has no support. | vs **4**: 3 fails at the **aggregation level** — the premises are true, the combination is unsupported. |
+| **4** | **false premise / corpus-contradicting** | The question presupposes something the corpus explicitly contradicts. | The **premise** is false against the corpus; there is no answer because the question should not be answered as asked. | vs **3**: 4 fails at the **premise level** — the inputs themselves are wrong, not the way they are combined. |
+| **5** | **scope-out-of-bounds** | Right subject, but the question asks for a facet, depth, or artifact class the document does not cover (e.g. implementation detail in a conceptual overview). | The corpus is topically adjacent but structurally silent on this kind of content. | vs **1**: retrieval returns genuinely on-topic chunks, unlike 1. vs **2**: 5 is missing a *kind* of content, not a specific entity. |
+| **6** | **granularity mismatch** | The corpus holds the information at a different level of aggregation than asked (per-item asked, aggregate given, or vice versa). | The right chunk is retrieved and is *about* the thing asked, at the wrong resolution. | vs **5**: 6's content class **is** covered; only the resolution is wrong. vs **3**: 6 needs no cross-chunk combination. |
+| **7** | **ambiguous referent** | The question is underspecified and could refer to several distinct corpus entities, with different answers. | There is no *unique* answer; answering requires a disambiguation the asker did not supply. | vs **2**: the referent exists — several times over. The failure is uniqueness, not absence. |
+
+**Classes 3 and 4 stay SPLIT. Collapsing them into one "the retrieved chunks
+don't support the answer" class is PROHIBITED.** They fail at different levels —
+3 at aggregation, 4 at premise — and an abstention mechanism that catches one
+need not catch the other: a Verifier checking "is this claim entailed by the
+retrieved text" behaves differently from one checking "does the retrieved text
+contradict the question's presupposition." **This is the same discipline applied
+in chunk 7.1's confident-misjudgement vs near-tie ordering-flip split, kept split
+in `chunk73-REPORT.md` §10.1 even though that pass could not establish it:**
+"*Rank movement alone does not separate a25 (1→7) from a03 (1→7)… no such check
+was run.*" The split was preserved there **because** the distinguishing evidence
+was missing, not despite it. Same here: 3 and 4 stay split until something
+measures them apart, and "they look similar on the signals we happened to have"
+is a reason to keep them split, never a reason to merge them.
+
+---
+
+### AUTHORING TEST — the class 1 / class 5 boundary, made CHECKABLE
+
+The 1-vs-5 boundary is a **continuum** — "a different subject" and "the right
+subject at an uncovered facet" shade into each other — and nothing in the table
+above makes the line checkable by anyone but the author's judgement. It is made
+checkable here, reusing **golden set v3's `absence_evidence` pattern**: an
+absence claim is not asserted, it is demonstrated with a corpus query and its row
+count.
+
+- **Class 1 qualifies only if a subject-noun `ILIKE` probe against the corpus
+  returns ZERO rows.**
+- **Class 5 qualifies only if the subject-noun probe returns NON-ZERO rows AND a
+  qualifier probe returns ZERO rows.**
+
+Every authored item carries **its SQL and its row counts, in the same shape as
+v3's `absence_evidence`**, in the artifact.
+
+**An item that fails its class's test is DISCARDED AND REPLACED, never
+reclassified into the other class.** Reclassification would let the partition be
+drawn to fit whatever text happened to get written — the class boundary would
+then be a description of the items rather than a constraint on them, which is the
+exact defect this artifact exists to escape.
+
+**Class 1's test is BINDING NOW.** Class 5's test binds only if the gate passes
+and classes 2–7 are authored.
+
+---
+
+### DIRECTIONAL PREDICTIONS — pre-registered, per SIGNAL FAMILY
+
+Predictions are written **per family, never per individual signal.** Family names
+are chunk 7.3's own, taken verbatim from the section comments of the code that
+pass ran (`chunk73-artifacts/phase2_signals.py`): **A** distance-profile shape
+(:120), **B** retrieved-set coherence over `included` (:138), **C** IDF-weighted
+coverage (:159, the brief's "query-term coverage"), **D** answer-type presence
+(:176), **E** perturbation stability (:186), **G** reranker score shape (:202,
+7.3's labelled control arm). No family name is invented.
+
+Legend — **SEP** = separates, with the stated direction; **NO** = does not
+separate; **INV** = separates in the direction *opposite* to the family's
+founding premise.
+
+| Family | 1 out-of-domain | 2 entity-absent | 3 synthesis | 4 false premise | 5 scope | 6 granularity | 7 ambiguous |
+|---|---|---|---|---|---|---|---|
+| **A** distance-profile shape | **SEP** — flatter curve, no elbow, larger top-1 distance | **NO** (replication of 7.3) | **NO** (predicted-negative) | **NO** (predicted-negative) | **SEP, weak** — intermediate between 1 and 2 | **NO** | **NO** |
+| **B** retrieved-set coherence | **SEP** — incoherent grab-bag: lower pairwise cosine, more index runs | **NO** | **NO** (predicted-negative) | **INV, weak** — *more* coherent than answerable | **SEP, weak** — lower coherence | **NO** | **SEP** — set spans several distinct entities: lower coherence, more runs |
+| **C** IDF-weighted coverage | **SEP** — genuinely disjoint vocabulary, real corpus-absence | **INV** (7.3 refutation: fires more on answerable) | **NO** (predicted-negative) | **NO** (predicted-negative) | **SEP, weak** | **SEP, very weak** — the granular term may be absent | **NO** |
+| **D** answer-type presence | **NO** — detector was near-constant in 7.3 and is expected to stay uninformative | **NO** | **NO** | **NO** | **NO** | **NO** | **NO** |
+| **E** perturbation stability | **SEP** — sparse, arbitrary neighbourhood reshuffles under jitter (the family's *original* direction) | **INV** (7.3 refutation: near-misses are *more* stable) | **NO** (predicted-negative) | **NO** (predicted-negative) | **SEP, weak** | **NO** | **SEP** — query sits on a cluster boundary; jitter flips which cluster wins |
+| **G** reranker score shape (control) | **SEP, weak** — higher softmax entropy, smaller margin | **NO** (7.3: all three DEAD) | **NO** | **NO** | **NO** | **NO** | **NO** |
+
+**Family-level rationale.**
+
+- **A, B, C, E separate on class 1 because class 1 is the only class where the
+  retrieval geometry is genuinely degraded.** Every other class retrieves
+  something topically right; class 1 does not.
+- **C's class-1 prediction is the direct test of whether the 7.3 refutation is
+  recipe-bound.** C2 was refuted *on v3's recipe*. Class 1 is the case where
+  corpus-absence should fire honestly. If it does not fire even here, the
+  refutation generalises past the recipe. Ceiling noted in advance: C2 is a
+  two-valued indicator (`idf(0)` is a constant), so its resolution is
+  categorical regardless of outcome.
+- **E's class-1 and class-7 predictions are in the family's ORIGINAL direction,
+  which 7.3 refuted on class 2.** This is not a re-litigation of that refutation.
+  7.3's finding was that a *near-miss* sits in dense territory; a class-1 query
+  and a class-7 boundary query do not. If E separates class 1 in the original
+  direction, both results are true and the family's scope is what changes.
+- **D is predicted uninformative everywhere.** It was NOT ESTABLISHED in 7.3 for
+  detector-near-constancy, and nothing in this design fixes the detector. It is
+  carried so its null is recorded, not because it is expected to work.
+- **G is carried as the control arm, exactly as in 7.3, with the same
+  pre-registered expectation that it mostly fails.** Its one weak SEP on class 1
+  is stated so a class-1-only success cannot later be presented as a surprise.
+
+**PREDICTED-NEGATIVES on classes 3 and 4 are predictions, with a rationale, and
+a landed predicted-negative is a POSITIVE FINDING.**
+
+The rationale: in classes 3 and 4 **retrieval does its job correctly.** The
+right chunks come back, ranked confidently, with a normal distance profile and
+normal coherence. Class 3's failure is that the *combination* of correct chunks
+is unlicensed; class 4's is that the *question's premise* is contradicted by the
+correct chunks. Neither failure is visible in the geometry of what was retrieved,
+because neither is a retrieval failure. Retrieval-side families are therefore
+predicted **not to separate**, and that prediction is made now, in advance, so it
+cannot be reinterpreted afterwards.
+
+**If those predicted-negatives land, that is a positive finding about where the
+signal must live, not another null.** It localises abstention for classes 3 and 4
+to the **Verifier** — a component that reads the retrieved text against the
+claim — and rules out the retrieval side for them by direct measurement rather
+than by assumption. A null that was predicted, with a mechanism, and that lands,
+is evidence. **This must not be counted alongside 7.3's nulls in any later "the
+signals didn't work" summary**; it is a different kind of result and is to be
+reported as such.
+
+---
+
+### THE OOD-FIRST GATE
+
+**Class 1 is authored and measured FIRST, alone, as its own gate. Classes 2–7 are
+not authored until it returns.**
+
+**The gate's job is to prove the discrimination task has dynamic range** — that
+these signal families can tell *anything* apart on this corpus. Chunk 7.3 could
+not distinguish "these signals don't work" from "these six items were
+unseparable by construction." Class 1 is the easiest possible positive class. If
+the retrieval-side families cannot separate a question about an entirely
+different subject from an answerable one, the families are not weak — they are
+inert, and no amount of better-designed unanswerables will change that.
+
+**Comparison, fixed now:**
+
+- **Positive class: the 12 class-1 OOD items ONLY, n = 12.**
+- **Negative class: golden set v3's 30 answerable questions.**
+- **v3's six unanswerables are EXCLUDED from this comparison.** Pooling them into
+  the positive class would reintroduce the single-recipe confound this entire
+  artifact exists to escape — a 18-item positive class that is two-thirds one
+  recipe measures the recipe again, with extra steps. They are excluded, and
+  their exclusion is pre-registered here so it cannot later look like a choice
+  made after seeing a result.
+
+**Gate outcome, pre-registered. PASS and FAIL are the only two outcomes; there
+is no third.**
+
+> **FAIL — if no retrieval-side family (A, B, C, E) separates the 12 OOD items
+> from the 30 answerable under the full kill criterion below, the retrieval-side
+> family is DEAD for abstention on this corpus, and classes 2–7 are NOT
+> AUTHORED.**
+
+> **PASS — the gate PASSES if at least one signal in families A, B, C or E both
+> (i) survives disjuncts W and C, and (ii) has an AUROC confidence interval
+> excluding 0.5, on the 12 OOD vs 30 answerable comparison.**
+
+The FAIL outcome ends the retrieval-side line of investigation and redirects the
+work to the Verifier. It is a real, accepted, pre-registered possibility, not a
+formality.
+
+**Why clause (ii) is required, and why survival alone is not a pass.** The kill
+criterion returns only **DEAD / not-DEAD**, and not-DEAD is merely "survives
+screening, UNVALIDATED" — which chunk 7.3 showed is not separation: A5, B4 and A3
+all survived while their overlap intervals held 6 of 6, 5 of 6 and 6 of 6 of the
+abstain class (`chunk73-REPORT.md` §13.1). Without clause (ii) this gate could
+pass on exactly that thin survival, leaving the **dynamic-range** question
+unanswered — and settling that question is the single thing the gate exists for.
+
+**The criterion the gate runs under** — both disjuncts quoted verbatim, applied
+as one rule. A signal is **DEAD** if **either** holds.
+
+> **(W — width.** `chunk73-REPORT.md` §9, lines 466–469, **the criterion as run in 7.3**.**)**
+>
+> > A signal is **DEAD** if the overlap interval covers more than 50% of the ANSWER
+> > class's observed range on the **ABSTAIN_UNANSWERABLE** comparison. The
+> > **ABSTAIN_BUDGET** comparison is **NOT ESTABLISHED** in this configuration and
+> > contributes **nothing either way**.
+>
+> **(C — concentration.** `docs/DECISIONS.md` lines 21–22, = `chunk73-REPORT.md` §13.2, pinned for the next screening pass — **this is that pass.**)
+>
+> > **A signal is also DEAD if its overlap interval contains more than half the
+> > abstain class, regardless of interval width.**
+>
+> with, verbatim from `chunk73-REPORT.md` §7:
+>
+> > **Overlap interval** = the value range where both classes coexist, i.e.
+> > `[max(min_abstain, min_answer), min(max_abstain, max_answer)]`
+
+Survival requires passing **both**. Disjunct C can only kill, never revive.
+
+**On naming — AMB-4 is resolved by these labels.** The 7.3 report uses one word
+for two different changes: dropping the `ABSTAIN_BUDGET` comparison (§9) and
+adding the concentration disjunct (§13.2). This entry therefore refers to the two
+disjuncts as **W** and **C** and **never uses the bare word "amended"** for
+either. **The ancestor two-comparison wording is NOT NEEDED and is not an open
+question:** this pre-registration attaches to the rule **as actually executed in
+7.3**, not to any ancestor of it, and the dropped `ABSTAIN_BUDGET` comparison is
+**empty by construction** — it contributes nothing either way and is not
+re-litigable.
+
+**Three points the criterion's wording does not settle are fixed now, and the
+fixes are binding** — they are not left for the analyst to settle mid-pass.
+Item 1 tightens the rule; items 2 and 3 are **new pre-registration decisions**,
+not readings of the source text.
+
+1. **"more than half" at n=12 — HALF OR MORE KILLS.** The disjunct-C boundary is
+   **≥ 6 of 12** inside the overlap interval, not ≥ 7 of 12. **Exactly half now
+   DIES.** The n=6 equivalent becomes **≥ 3 of 6**.
+
+   **Why this tightening is pre-registration and not post-hoc fitting: it is made
+   BEFORE any probe text is authored, BEFORE any embedding, and BEFORE any
+   measurement.** §13.2 forbids tightening a rule *after seeing which signals it
+   spared*. **Nothing has been spared here, because nothing has been measured** —
+   there is no result for this rule to have been fitted to. That timing is the
+   justification, and it is the whole justification.
+
+   Substantively: **an exact-half band is a coin flip, and sparing a signal there
+   is not evidence of separation.** A rule whose job is to kill signals that fail
+   to separate should not hand survival to a signal whose overlap interval holds
+   half its positive class.
+2. **NEW PRE-REGISTRATION DECISION — not a reading of §9 or §13: "the abstain
+   class" when the positive class is not `ABSTAIN_UNANSWERABLE`.** Disjunct W
+   names that v3 label explicitly; the 12 OOD items carry no v3 label. The source
+   text does not settle this, and the decision made here is: **"the abstain class"
+   means whichever positive class the comparison is defined over — here, the 12
+   OOD items.** W's reference to `ABSTAIN_UNANSWERABLE` is taken as identifying
+   7.3's positive class, not as restricting the rule to that label.
+3. **NEW PRE-REGISTRATION DECISION — not a reading of §9 or §13: W's denominator,
+   "the ANSWER class's observed range".** Fixed in advance as **all 30 of v3's
+   answerable questions**, and **not trimmed after seeing results under any
+   justification.** `chunk73-REPORT.md` §7.2 is the reason: dropping 8 ceiling
+   items moved E1's overlap from 92.3% to 100.0%. The denominator is a lever and
+   it is nailed down now.
+
+**Class 1 n = 12, with its rationale.** At n=6, disjunct C resolves at 1/6
+granularity with the kill boundary at 3/6 — **a single item moving in or out of
+the overlap interval decides the verdict.** Every one of 7.3's survivors sat at
+5/6 or 6/6. n=12 halves the granularity to 1/12, moves the boundary to 6/12, and
+removes single-item decisiveness.
+**INFERRED, and explicitly NOT a power calculation** — no power analysis was run
+and none is claimed. It is arithmetic about how few items it currently takes to
+flip a verdict.
+
+**Per-class n for classes 2–7 is NOT set by this entry** and must not be inferred
+from 12. It is set only if the gate passes, in a follow-up entry.
+
+---
+
+### HARD CONSTRAINTS — binding
+
+1. **Authoring proceeds WITHOUT consulting chunk 7.3's per-item signal values.**
+   `chunk73-signals.json` and `phase3_stats.json` are not read while probe
+   questions are being written. Authoring a probe against known per-item values
+   is fitting the set to the signals.
+2. **Golden set v3 stays byte-identical.** `tests/fixtures/golden_set_v3.json`,
+   sha256 `2ca9c82b263e73619c8896c6739739943a2b6affb351e8187f1a340e01ff2529`
+   (OBSERVED, verified this pass). The abstain mechanism set is a **separate,
+   additive artifact** and is **read by NO gate input** — no benchmark, no DoD
+   check, no chunk gate consumes it.
+3. **No re-embedding of the corpus.** 260 chunks, voyage-4-lite, frozen.
+   `document_id doc_01M0D39WZDYY7STA3PHWT5R4C7` unchanged (OBSERVED at
+   `golden_set_v3.json` → `corpus.document_id`, `corpus.chunks` = 260). Only
+   *query* vectors are ever embedded by this work.
+4. **Mechanism classes are retro-tagged onto v3's six unanswerables in the NEW
+   artifact's metadata, keyed by v3 `id`, and v3 is never written.** (All six are
+   expected to tag as class 2 — that is the root finding, recorded as a tag, not
+   asserted as a new result.) **Evidence that `id` is a safe key** (OBSERVED,
+   parsed from `entries[].id` this pass): **unique 36 of 36**; and
+   **non-positional** — `ids[5]` is `a07`, not `a06`, and `a06`, `a08`, `a12`,
+   `a16`, `a26` are all **absent** from the set. Positional indexing into v3
+   would therefore silently mis-key; `id` would not.
+5. **Naming: "abstain mechanism set" / `abstain_mechanisms`. "Probe set" is
+   PROHIBITED as a name for it.** That term is already bound: `docs/DECISIONS.md`
+   line 1453, inside the 2026-08-20 "golden set v3 APPROVED" entry, uses "probe
+   sets" for the **absence-SQL queries** run against the corpus when authoring a
+   v3 unanswerable — "*Five of six probe sets initially returned non-zero rows*".
+   Reusing the word would collide two different things inside the same document,
+   one of them nested inside the other's provenance.
+
+---
+
+### EMBEDDING PLAN — recorded before it runs
+
+**Batching is confirmed supported** (OBSERVED): `app/services/embeddings.py:23`
+`VOYAGE_MAX_TEXTS_PER_REQUEST = 1000` and `:26`
+`VOYAGE_MAX_TOKENS_PER_REQUEST = 100_000` — both ceilings are far above anything
+this artifact needs. The call is list-in/list-out with **order preserved**:
+`:141` `"input": texts,` and `:163`
+`return [item["embedding"] for item in payload["data"]]`. Every batch here is a
+single request.
+
+**TWO consent events, not one.**
+
+1. **Event 1 — the 12 OOD queries only.** Nothing else is embedded.
+2. **Event 2 — classes 2–7 — is requested ONLY IF THE GATE PASSES.** If the gate
+   fails, event 2 never happens and no further money is spent. Bundling both into
+   one approval would pre-commit spend to a branch the gate is supposed to be
+   able to close.
+
+**Gate path** (OBSERVED): `load_query_vectors(..., allow_network=True)`,
+`app/services/evaluation.py:278-284` — the `if missing and not allow_network:`
+branch whose own error text says it "*is the only place in this module that can
+spend money*". `allow_network=True` is passed at exactly the two consent events
+above and nowhere else.
+
+**Pinning — the obvious approach does not work, and the reason is recorded.**
+`tests/fixtures/query_embeddings.json` is **gitignored** (OBSERVED:
+`git check-ignore -v` → `.gitignore:23`) and **untracked** (`git status
+--porcelain` returns nothing for it), and it is **fully rewritten on every
+miss** — `app/services/evaluation.py:291-292` does
+`cache_path.write_text(json.dumps(cache))` over the whole file, with no
+append-only path. **Hashing that file pins nothing**: its digest changes whenever
+any unrelated query is embedded, and it is not in the repository to be pinned
+against in the first place.
+
+**Instead: extract the probe-only vectors into a separate tracked artifact and
+pin its sha256, following the corpus pattern.** The corpus does exactly this —
+`app/corpus/corpus_vectors.json:5` carries `"vectors_sha256": "dd4c…7100"`, and
+`app/services/vector_store.py:208-212` recomputes the digest on load and raises
+`CorpusUnavailableError` on mismatch. **Fatal, not a warning.** The abstain
+mechanism set's vectors get the same treatment: tracked file, digest in the
+manifest, hard failure on drift.
+
+---
+
+**Nothing in this entry is a result.** No probe question text was authored. No
+vector was embedded. No signal was computed. No threshold is proposed, and none
+may be derived from this artifact when it exists. This is a pre-registration and
+its only claim is about what will be measured, in what order, and what will
+count as failure.
+
+**Evidence:** `DevBrain/rag-reliability/passes/chunk73-artifacts/chunk73-REPORT.md`
+§9 (criterion as run, lines 462–475), §7 (overlap-interval definition, 335–338),
+§7.2 (ANSWER-range sensitivity), §10.1 (the 7.1 split precedent, 529–547), §13
+(criterion defect, concentration disjunct, observation, 652–707); `phase2_signals.py` lines
+120/138/159/176/186/202 (family names, verbatim); `docs/DECISIONS.md` lines 21–22
+(concentration disjunct), 80 and 138 (the two 7.3 refutation entries), 1453
+("probe set" already bound); `tests/fixtures/golden_set_v3.json` sha256
+`2ca9c82b263e73619c8896c6739739943a2b6affb351e8187f1a340e01ff2529`, 36/36 unique
+non-positional ids, `corpus.document_id doc_01M0D39WZDYY7STA3PHWT5R4C7`;
+`app/services/embeddings.py:23,26,141,163`;
+`app/services/evaluation.py:278-284,291-292`; `app/corpus/corpus_vectors.json:5`;
+`app/services/vector_store.py:208-212`; `.gitignore:23`. Full read log and
+NOT-ESTABLISHED list: `/tmp/chunk74prereg/phase1-notes.md`.
+
+---
+
 ## 2026-09-02 — METHODOLOGY: a screening kill criterion must measure CONCENTRATION, not just interval WIDTH
 
 **Decision:** the overlap-interval kill criterion used to screen candidate signals is amended, for
