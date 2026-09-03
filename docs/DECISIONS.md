@@ -13,6 +13,234 @@ Newest entries first.
 
 ---
 
+## 2026-09-03 — Chunk 7.4: the OOD gate PASSES — dynamic range EXISTS, and the signals that carry it are measuring DISTANCE FROM THE CORPUS
+
+**Decision:** the pre-registered OOD-first gate **PASSES**. The retrieval-side
+line of investigation is **NOT DEAD** on this corpus, and classes 2–7 are
+authorised to proceed. Two signals in families A–E clear the full condition on
+the 12 class-1 OOD items against v3's 30 answerable:
+
+| signal | AUROC | 95% CI | overlap | positives inside | W | C | verdict |
+|---|---|---|---|---|---|---|---|
+| `A2_gap_1_mean` | **0.019** | [0.000, 0.064] | 11.8% | 4/12 | no | no | SURVIVES, CI excludes 0.5 |
+| `C1_idf_coverage` | **0.025** | [0.000, 0.075] | 37.0% | 5/12 | no | no | SURVIVES, CI excludes 0.5 |
+
+**The verdict stands as run.** It was computed under the criterion exactly as
+pre-registered on 2026-09-03 — both disjuncts, the ≥6-of-12 boundary, the
+untrimmed 30-item denominator — and **nothing in the diagnostic that followed
+revised it, and nothing in it may be used to revise it later.** The diagnostic
+pass promoted, demoted and re-verdicted no signal.
+
+**What the gate establishes is exactly what it was built to establish and no
+more: the discrimination task has dynamic range.** Chunk 7.3 could not separate
+"these signals don't work" from "these six items were unseparable by
+construction." That question is now answered: the families are not inert. They
+can tell something apart on this corpus. They have not been shown to tell
+*unanswerability* apart.
+
+---
+
+### THE PASS CONDITION HAS A DEFECT. IT IS RECORDED HERE, NOT REPAIRED.
+
+**The condition says nothing about DIRECTION, and both passing signals separate
+in the direction OPPOSITE to their pre-registration.**
+
+The gate requires "an AUROC confidence interval excluding 0.5." A CI excluding
+0.5 from **below** satisfies that wording exactly as well as one excluding it
+from above. Both survivors excluded it from below: A2 at 0.019 and C1 at 0.025
+are near-perfect inversions. The pre-registration predicted family A as **SEP —
+flatter curve, no elbow, larger top-1 distance** and family C as **SEP —
+genuinely disjoint vocabulary, real corpus-absence**, both in the ordinary
+direction. Neither landed in the direction predicted. The gate passed anyway,
+because the condition it was written to test does not read direction.
+
+**This is a defect in the pre-registered rule's DESIGN, not in its execution.**
+The rule was applied faithfully to every signal — nothing was mis-run,
+mis-computed or mis-reported. What failed is **what the rule measured**. "The CI
+excludes 0.5" measures *that* the classes separate; it is silent on *which way*,
+and a family-level directional prediction that the same document states in the
+same breath is then never checked against the result. Those are different
+quantities and on this data they came apart.
+
+**The condition is NOT AMENDED here, and the reason is the whole point.**
+Tightening a gate condition after seeing which signals it passed is precisely
+the post-hoc move `chunk73-REPORT.md` §13.2 forbids, and the 2026-09-02
+METHODOLOGY entry states the exemption does not exist: **a rule tightened after
+seeing which signals it spared is still a rule fitted to data, and being stricter
+doesn't exempt it.** The same discipline that made 7.3's negative result
+trustworthy applies to 7.4's positive one. The gate stands as written and as run.
+
+**Binding on every future pass: a gate condition that carries a directional
+prediction must test direction in advance.** The remedy is a better
+pre-registered rule next time, not a rewritten one this time. Pre-registration
+discipline is not weakened by this entry; it is what forces the defect to be
+recorded rather than quietly fixed.
+
+---
+
+### THE INVERSION IS CORPUS-DISTANCE, MEASURED
+
+Nine of 17 signals landed below AUROC 0.2. The cause is measured, not inferred:
+
+- **Top-1 distance ALONE classifies 12-vs-30 at AUROC 0.992 [0.967, 1.000].**
+  Any signal correlated with it inherits that separation for free.
+- The nine sub-0.2 signals have **mean |pooled r| = 0.590** with top-1 distance,
+  against 0.303 for the other eight.
+- That correlation **collapses on conditioning: 0.590 pooled → 0.266 within
+  answerable, 0.254 within OOD.**
+- `C1_idf_coverage` is the extreme case: **pooled r = −0.828, within-OOD
+  r = +0.001.**
+
+**A pooled correlation that vanishes when you condition on class is a
+between-class shift, not a within-class relationship.** These signals are
+measuring **distance from the corpus**, not answerability. That is what carried
+the gate.
+
+---
+
+### THE MECHANISM IS SPLIT. THE TWO HALVES ARE NOT THE SAME FINDING AND ARE NOT TO BE COLLAPSED.
+
+**Half one — "flat profiles read as coherence." Holds for family A and for C1.**
+OOD retrieved profiles are genuinely flatter: std of top-30 **0.031 vs 0.066**,
+fall-off **0.082 vs 0.191** (class medians, OOD vs answerable). A flat far-field
+profile has no elbow and no gap, so the shape signals read it as the absence of
+the thing they were built to detect. C1 needs no mediation argument at all: an
+OOD query's high-IDF lexemes are by construction absent from the corpus, so
+coverage sits near floor (median **0.145 vs 0.581**).
+
+**Half two — B and E do NOT work this way, and saying they do would be wrong.**
+The OOD retrieved sets are **LESS** coherent (B1 **0.681 vs 0.723**; B2 0.418 vs
+0.525) and **LESS** stable under perturbation (E2 **0.548 vs 0.667**; E3 0.837 vs
+0.916) — the opposite of the answerable class on both counts. Flatness did not
+mimic coherence here. These invert because **the pre-registered direction was
+wrong**: the prediction was that abstain cases score low on coherence and
+stability, they do score low, and the answerable class scores lower still is not
+what happened — what happened is that the family's founding premise put the
+classes the other way round. A flat, far neighbourhood reshuffles easily and its
+members are mutually unrelated.
+
+**Two mechanisms, recorded separately.** One is a measurement artifact of
+distance; the other is a wrong directional premise. Collapsing them into "the
+signals inverted" would lose the distinction that matters for classes 2–7.
+
+---
+
+### C1's SIGN REVERSAL — WHAT IT DOES AND DOES NOT ESTABLISH
+
+7.3 measured `C1_idf_coverage` at **0.567**, the ordinary direction, on the six
+v3 near-misses. 7.4 measures it at **0.025** on the 12 OOD items, against the
+same 30 negatives, under the same config and the same code. **This is a sign
+reversal, not a sharpening of a weak result.** The two numbers sit on opposite
+sides of chance.
+
+**What it establishes:** the family-C behaviour recorded in 7.3 is **not a fixed
+property of the signal on this corpus.** It changes sign with the positive
+class. A result that flips when only the positive class is swapped is a
+measurement of the positive class, which is the proposition the whole
+`abstain_mechanisms` artifact was pre-registered to test, and on that narrow
+point the answer is yes.
+
+**What it does NOT establish — and this is where the pre-registration's own test
+must be read precisely.** The 2026-09-02 paraphrase-distance refutation is a
+finding about **C2**, `C2_corpus_absence`, not about C1; the pre-registration's
+"direct test of whether the 7.3 refutation is recipe-bound" is stated at family
+level with its rationale written in terms of C2. C2's own 7.4 result is
+therefore the one that bears on it, and it is this: **C2 fired on 12 of 12 OOD
+items** (against 21 of 30 answerable), AUROC 0.650 [0.567, 0.717] — it *did*
+fire honestly on a vocabulary-disjoint positive class, exactly as the
+pre-registration predicted it should. **And it is still DEAD**, killed by
+disjunct C: as a two-valued indicator its overlap interval is the single point
+6.2577, which contains all 12 positives. **The pre-registration flagged this
+ceiling in advance** — "C2 is a two-valued indicator (`idf(0)` is a constant), so
+its resolution is categorical regardless of outcome."
+
+So: whether the paraphrase-distance refutation generalises past the v3 recipe is
+**NOT ESTABLISHED**. C2 fired where the refutation said it structurally could
+not, which is evidence the refutation is recipe-bound; but it fired
+categorically, on a class where it cannot fail to fire, and was killed by the
+criterion anyway. C1's reversal is a different signal answering a different
+question. **Neither number settles it, and it is left open rather than resolved
+in the direction either one points.**
+
+---
+
+### THE GATE CANNOT SEPARATE UNANSWERABILITY FROM FAR-FIELD. THIS BOUNDS WHAT CLASS 1 ESTABLISHED.
+
+**The two classes barely touch.** The 10 hardest answerable questions — the ones
+with the largest top-1 distance — top out at **1.4932**. The OOD class *starts*
+at **1.4131**. Answerable spans [0.7189, 1.4932]; OOD spans [1.4131, 1.7829].
+**Every result in this pass is confounded between "the question is unanswerable"
+and "the query is far from the corpus," and no comparison available in this data
+separates them.**
+
+**The control arm reached 0.994 and must be recorded plainly.** `G3_softmax_entropy`
+— reranker softmax entropy, 7.3's labelled control — scored **AUROC 0.994
+[0.975, 1.000]** on 12-vs-30, the largest figure anywhere in the pass. The
+pre-registration predicted only **"SEP, weak"** for family G on class 1, and
+stated the reason it was writing that down: "so a class-1-only success cannot
+later be presented as a surprise." It is not presented as a surprise. It is
+recorded as far larger than predicted. G3's class ranges do overlap —
+[3.2262, 3.3850], holding 2 of 12 OOD and 1 of 30 answerable — so the separation
+is near-total, not clean.
+
+Restricted to the 10 hardest answerable as negatives, G3 holds at **0.983
+[0.925, 1.000]**. That is **evidence against G3 being a pure far-field
+detector**. It is **NOT clean evidence that G3 detects unanswerability**: even
+those 10 sit below most of the OOD set — their maximum, 1.4932, is barely above
+the OOD minimum, 1.4131 — so the restriction cannot break the confound, only
+strain it. Recorded as a diagnostic, not a verdict, and not promoted: G is the
+control arm and takes no part in the gate.
+
+---
+
+### WHAT THIS MEANS FOR CLASSES 2–7
+
+**Class 1 established dynamic range and NOTHING MORE.** It is the easiest
+possible positive class by design, and it turned out to be easy for a reason the
+gate does not care about: the queries are far from the corpus. The gate's job
+was to rule out inertness, and it did.
+
+**Classes 2–7 are in-domain.** Their queries share the corpus's subject and
+vocabulary, so they will sit **inside the answerable distance band** — which is
+exactly where the corpus-distance confound disappears and the real test of these
+signal families lives. Class 1 could not run that test. Classes 2–7 can.
+
+**No per-class n is set here. No item is authored here. Nothing beyond the
+authorisation is decided here.** The gate's PASS authorises proceeding; what
+proceeding looks like is not settled by this entry.
+
+---
+
+**Evidence:**
+`DevBrain/rag-reliability/passes/chunk74-artifacts/gate-report.md` sha256
+`93ac4ecc14e2737e88d004e335e1021a7353bf79057a71d25bd9bb6022561056`;
+`DevBrain/rag-reliability/passes/chunk74-artifacts/inversion-diagnostic.md` sha256
+`923a0c3031ec77966055116847b45671e7a2b955126b7e917e2e1773eda4c586`.
+
+Gate config, identical to 7.3's primary arm: arm `vector`, `candidate_k=30`,
+`rerank_n=40`, `k_curve=40`, sigma 0.20, 20 draws, `seed_base=20260902`, local
+ONNX reranker; AUROC by mid-rank Mann-Whitney with 1000 bootstrap resamples,
+seed 20260902. Signal definitions spliced byte-identical from
+`chunk73-artifacts/phase2_signals.py`; `auroc`/`boot`/`overlap` spliced
+byte-identical from `phase3_analyse.py`.
+
+Positive class: the 12 class-1 OOD items, vectors pinned at
+`tests/fixtures/class1_query_vectors.{npy,json}`, `vectors_sha256`
+`91aec7727cc271293cd4bd0c0fe6639d49864e45072206da3f83db040ec79489`, verified
+before every use; question texts frozen at class1-draft.json sha256
+`ce159eb4cf2d30fa18fe3105a4314873ae7d8d8358192b13a2c0bae4e64026eb`, each
+verified by a zero-row subject-noun `ILIKE` probe (12 of 12 zero rows).
+Negative class: v3's 30 answerable; v3's 6 unanswerables excluded as
+pre-registered.
+
+**The 12-figure corpus-drift tripwire reproduced exactly** before any comparison
+was computed — lexical `0.233 0.400 0.567 0.142`, vector `0.833 0.900 1.000
+0.700`, hybrid `0.667 0.867 0.967 0.445`, `NoOpReranker`, golden set v3 — so the
+corpus and index had not moved under the benchmark. Golden set v3 unchanged by
+this pass.
+
+---
+
 ## 2026-09-03 — PRE-REGISTRATION: the abstain mechanism set — TRIAGE ONLY, OOD-first, and classes 3 and 4 stay SPLIT
 
 **Decision:** an additive artifact, the **abstain mechanism set**
