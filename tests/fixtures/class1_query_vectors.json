@@ -1,0 +1,123 @@
+{
+  "collection": "chunks_voyage4lite_1024",
+  "model": "voyage-4-lite",
+  "input_type": "query",
+  "dimensions": 1024,
+  "count": 12,
+  "vectors_sha256": "91aec7727cc271293cd4bd0c0fe6639d49864e45072206da3f83db040ec79489",
+  "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+  "ids": [
+    "ood01",
+    "ood02",
+    "ood03",
+    "ood04",
+    "ood05",
+    "ood06",
+    "ood07",
+    "ood08",
+    "ood09",
+    "ood10",
+    "ood11",
+    "ood12"
+  ],
+  "source": "chunk74 class-1 out-of-domain query set; consent event 1, one batched Voyage request",
+  "class1_draft_frozen_sha256": "ce159eb4cf2d30fa18fe3105a4314873ae7d8d8358192b13a2c0bae4e64026eb",
+  "records": [
+    {
+      "id": "ood01",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "How deep can a sperm whale dive when it is hunting squid?",
+      "subject_noun": "sperm whale",
+      "question_form": "figure",
+      "subject_domain": "marine biology"
+    },
+    {
+      "id": "ood02",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "In a Baroque ensemble, what instruments actually make up the basso continuo?",
+      "subject_noun": "basso continuo",
+      "question_form": "definition",
+      "subject_domain": "early music performance"
+    },
+    {
+      "id": "ood03",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "Who commissioned the fortified wall that runs across northern Britain from the Tyne to the Solway?",
+      "subject_noun": "fortified wall",
+      "question_form": "name",
+      "subject_domain": "Roman history"
+    },
+    {
+      "id": "ood04",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "How should a beekeeper move a colony a few metres across the garden without the foragers failing to find their way home again?",
+      "subject_noun": "foragers",
+      "question_form": "procedure",
+      "subject_domain": "beekeeping"
+    },
+    {
+      "id": "ood05",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "What is the practical difference between worsted and woollen yarn when you are knitting a winter jumper?",
+      "subject_noun": "worsted",
+      "question_form": "comparative",
+      "subject_domain": "textile craft"
+    },
+    {
+      "id": "ood06",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "How much ash did Mount Pinatubo put into the stratosphere when it erupted in 1991?",
+      "subject_noun": "Pinatubo",
+      "question_form": "figure",
+      "subject_domain": "volcanology"
+    },
+    {
+      "id": "ood07",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "What is a greenstick fracture, and why does it happen mostly in children?",
+      "subject_noun": "greenstick fracture",
+      "question_form": "definition",
+      "subject_domain": "orthopaedic medicine"
+    },
+    {
+      "id": "ood08",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "What is the correct way to temper dark chocolate so that it sets with a glossy finish and a clean snap?",
+      "subject_noun": "tempering",
+      "question_form": "procedure",
+      "subject_domain": "confectionery"
+    },
+    {
+      "id": "ood09",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "Which European bird leaves its eggs in the nests of warblers and pipits for them to raise?",
+      "subject_noun": "pipits",
+      "question_form": "name",
+      "subject_domain": "ornithology"
+    },
+    {
+      "id": "ood10",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "For sailing a small coastal boat single-handed, is a gaff rig or a bermudan rig easier to manage?",
+      "subject_noun": "gaff rig",
+      "question_form": "comparative",
+      "subject_domain": "sailing"
+    },
+    {
+      "id": "ood11",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "How many rotations does a quadruple Salchow have to complete before the skater lands it?",
+      "subject_noun": "Salchow",
+      "question_form": "figure",
+      "subject_domain": "figure skating"
+    },
+    {
+      "id": "ood12",
+      "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
+      "question": "What does a landlord in Scotland have to do to bring a private residential tenancy to an end lawfully?",
+      "subject_noun": "residential tenancy",
+      "question_form": "procedure",
+      "subject_domain": "housing law"
+    }
+  ]
+}
