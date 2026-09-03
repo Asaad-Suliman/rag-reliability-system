@@ -404,7 +404,9 @@ non-positional ids, `corpus.document_id doc_01M0D39WZDYY7STA3PHWT5R4C7`;
 `app/services/embeddings.py:23,26,141,163`;
 `app/services/evaluation.py:278-284,291-292`; `app/corpus/corpus_vectors.json:5`;
 `app/services/vector_store.py:208-212`; `.gitignore:23`. Full read log and
-NOT-ESTABLISHED list: `/tmp/chunk74prereg/phase1-notes.md`.
+NOT-ESTABLISHED list:
+`DevBrain/rag-reliability/passes/chunk74-artifacts/phase1-notes.md` sha256
+`778091144386827ebeddfce3b27f7a1f605126e97baf86c01f01b792a0884281`.
 
 ---
 
