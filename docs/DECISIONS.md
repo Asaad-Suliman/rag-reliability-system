@@ -13,6 +13,170 @@ Newest entries first.
 
 ---
 
+## 2026-09-02 — METHODOLOGY: a screening kill criterion must measure CONCENTRATION, not just interval WIDTH
+
+**Decision:** the overlap-interval kill criterion used to screen candidate signals is amended, for
+**every future screening pass**, with an additional disjunct:
+
+> **A signal is also DEAD if its overlap interval contains more than half the abstain class,
+> regardless of interval width.**
+
+It is an additional disjunct, never a replacement: it can only ever **kill** a signal, never revive
+one, so it strictly tightens the rule and cannot be used to rescue anything.
+
+**Scope: this is a methodology correction, not a chunk 7.3 finding.** It governs how any future pass
+screens any candidate signal against any positive class. Chunk 7.3 is where the defect surfaced; it
+is not where the defect lives.
+
+**The defect is in the PRE-REGISTERED RULE'S DESIGN, not in its execution.** The rule was applied
+faithfully, as written, to every signal in chunk 7.3 — nothing was mis-run, mis-computed or
+mis-reported. What failed is **what the rule measured**. Width of the overlap interval, expressed as
+a fraction of the ANSWER class's range, says how far the two classes' value ranges reach into each
+other. It says nothing about **how many members of either class actually sit inside that reach**.
+Those are different quantities, and on real data they come apart.
+
+**Pre-registration discipline stands. The fix is a better pre-registered rule, not abandoning
+pre-registration.** A criterion fixed before results is what made chunk 7.3's negative result
+trustworthy; that property is not in question here and must not be weakened by this entry. What this
+records is that a pre-registered rule can be *wrong in its construct* while being *right in its
+discipline*, and the remedy is to pre-register a better one next time.
+
+**The reductio — E2.** Signal E2 (minimum top-5 Jaccard under query perturbation) is **constant at
+0.6667 across the entire positive class**: it takes two distinct values over 36 questions and cannot
+discriminate anything by construction. Its overlap interval is therefore a zero-width point,
+`[0.6667, 0.6667]`, which the width rule scores as **0.0% overlap — the best possible score.** That
+interval contains **6 of 6 abstain and 22 of 30 answer questions**: near-total overlap by count,
+scored as zero overlap by width. A signal constant on the positive class is the ideal case for a
+width rule and the worst case for a screening rule. Width and concentration are different
+quantities, and only concentration is evidence about separation.
+
+The same defect, less starkly, spared chunk 7.3's three survivors: A5 elbow_index (17.9% width, **6
+of 6** of the abstain class inside the interval), B4 max index gap (43.1%, **5 of 6**), A3 z_top1
+(43.8%, **6 of 6**). A narrow interval is evidence of separation only if the classes are *outside*
+it; a rule that never looks inside cannot tell "the classes barely meet" from "both classes are
+piled into one narrow band."
+
+**NOT retro-applied to chunk 7.3, deliberately.** The criterion that pass ran under was fixed before
+any result was seen and **stands as run**. Changing a kill rule after seeing which signals it spared
+is exactly the post-hoc move the discipline exists to prevent — and the fact that the amendment is
+*stricter* does not exempt it: **a rule tightened after seeing which signals it spared is still a
+rule fitted to data, and being stricter doesn't exempt it.**
+
+**OBSERVATION (not a verdict).** All three of chunk 7.3's survivors — A5, B4, A3 — **would be DEAD
+under the amendment**, each having more than half the abstain class inside its interval. E2 would be
+dead by it too, having already been ruled NOT ESTABLISHED on independent grounds. This is recorded
+as an observation about **the amendment's effect**, not as a re-verdict: chunk 7.3 §9's verdicts
+stand as run, and A5/B4/A3 remain "survives screening, UNVALIDATED" in that pass's record. What the
+observation does establish is that those three survivals are thin — none had CI-supported evidence
+of discrimination in any direction — and any future reader of that promotion should read this entry
+with it.
+
+**Evidence:** `DevBrain/rag-reliability/passes/chunk73-artifacts/chunk73-REPORT.md` §13 (defect,
+amendment, observation), §9 (verdicts as run), §7.1 (E2 as reductio);
+`chunk73-signals.json` sha256 `a99e346c27e9e08de27d4df036b8e15a75458bb0878443da23ba68cae32ea51f`.
+
+---
+
+## 2026-09-02 — Chunk 7.3: perturbation stability is INVERTED — unanswerable queries sit in MORE stable neighbourhoods
+
+**Decision:** query-vector perturbation stability is **rejected as an abstention signal**, and the
+premise it was built on is recorded as **refuted, not merely unsupported**.
+
+**The measurement.** Isotropic Gaussian noise at σ=0.20 of the query vector's L2 norm, 20 seeded
+draws per question, exact search at k=40, retrieved-set overlap against the unperturbed run. On the
+primary arm (vector + local reranker, 30 candidates, budgeted context):
+
+| Signal | ANSWER (n=30) | ABSTAIN_UNANSWERABLE (n=6) | AUROC [95% CI] |
+|---|---|---|---|
+| E3 mean Jaccard @20 | **0.9160** | **0.9266** | 0.528 [0.278, 0.758] |
+| E1 mean Jaccard @5 | 0.9333 | 0.8667 | 0.325 [0.133, 0.561] |
+| E2 min Jaccard @5 | 0.6667 | 0.6667 | degenerate — 2 distinct values, constant on the positive class |
+
+**Reasoning.** E assumed an unanswerable query sits in an unstable neighbourhood, so jittering it
+would reshuffle the retrieved set more. E3 — the continuous member, no ceiling, range 0.8413–0.9905
+— says the **opposite**: the abstain class is *more* stable. This is not weak separation, it is a
+directional refutation. It is coherent with what a near-miss actually is: a question aimed squarely
+at a real, densely-populated region of the corpus that happens not to contain the answer. A
+well-populated neighbourhood is a robust one. The question being unanswerable is a fact about the
+*text*, not about the geometry the query lands in.
+
+E1 does point the intended way, but is DEAD on the pre-registered criterion (92.3% overlap) and its
+apparent discrimination is carried by 8 ANSWER questions tied at the 1.0 ceiling — dropping them
+moves AUROC 0.325 → 0.443 (toward chance) and worsens overlap to 100.0%.
+
+**Scope: this generalises beyond this corpus.** Unlike the C2 finding recorded below, this does not
+depend on how golden set v3 was constructed. The mechanism — a near-miss is by definition a query
+that lands in dense, well-supported corpus territory — is a property of what "near-miss" means, not
+of these six items. Any abstention design premised on "unanswerable ⇒ unstable retrieval" should be
+treated as refuted until someone measures otherwise on a different corpus.
+
+**Caveats.** n=6 on the positive class; every CI is wide and includes 0.5. The σ=0.20 sweep envelope
+(6 probes) broke on the ceiling side at full scale — 0/6 probes predicted at the 1.0 ceiling, 8/36
+observed. σ was **not** re-tuned after seeing that, deliberately.
+
+**Evidence:** `DevBrain/rag-reliability/passes/chunk73-artifacts/` — `chunk73-REPORT.md` §8.2, §7.2,
+§4.1; `chunk73-signals.json` sha256 `a99e346c27e9e08de27d4df036b8e15a75458bb0878443da23ba68cae32ea51f`.
+
+### Control arm G — pre-registered expectation held
+
+**Control arm G failed as pre-registered — 7.1's conclusion stands unamended.** Reranker score
+*shape* (within-query z of top-1, top1−top2 margin, softmax entropy over the reranked scores) was
+run as a labelled control with the pre-registered expectation that it fails. It failed: all three
+DEAD (67.7%, 87.9%, 93.1% overlap), every CI including 0.5. **No void-convention entry against the
+2026-08-2x wording of chunk 7.1's conclusion is required, and none should be written.** Reranker
+score does not track groundedness; that conclusion is untouched by this pass.
+
+One exploratory observation is fenced off and must not be read as contradicting the above: on a
+separate, non-pre-registered class (answerable questions whose gold chunk the reranker itself pushed
+below rank 5, n=8), G3 softmax entropy scored AUROC 0.795 [0.551, 0.977]. That asks whether the
+cross-encoder is uncertain when it misranks — a self-consistency property — not whether its score
+tracks groundedness. 34 comparisons were run without multiplicity correction, so ~1–2 such CIs are
+expected by chance and exactly 2 appeared. Not promoted, not counted, not a finding.
+
+---
+
+## 2026-09-02 — Chunk 7.3: IDF-weighted rare-term absence measures PARAPHRASE DISTANCE, not unanswerability
+
+**Decision:** pre-retrieval corpus-absence of rare query terms is **rejected as an abstention
+signal on this corpus**, and the reason is recorded as **structural**, not as a tuning failure.
+
+**The measurement.** `idf(t) = ln((N − ndoc(t) + 0.5)/(ndoc(t) + 0.5) + 1)`, N=260, with `ndoc` read
+from `ts_stat('SELECT content_tsv FROM chunks')` — read-only, no index rebuilt, no new dependency.
+C2 = max IDF among query lexemes with zero corpus occurrences.
+
+C2 fires on **21 of 30 answerable** and **3 of 6 near-miss unanswerable** questions — *more often on
+the negative class*. Overlap 100.0% of the ANSWER range; AUROC 0.400 [0.183, 0.600]. DEAD.
+
+**Reasoning — why it cannot work here, by construction.** Golden set v3's near-misses were
+*deliberately built to share vocabulary with the corpus*. u01's own authoring note records the
+choice: overlap 3/7 = 0.43, "above the 0.30 line and left as-is deliberately… a question about one
+named model's price cannot avoid naming it. Padding the question to dilute the ratio would game the
+metric without reducing leakage." A rare-term-absence detector therefore **structurally cannot fire**
+on the very items it is meant to catch.
+
+What it fires on instead is answerable questions with unusual phrasing. a01 — *"Where did the person
+who wrote this book go to university?"* — scores maximum corpus-absence, because both `univers` and
+`wrote` are genuinely absent from the 260-chunk corpus (verified against an independent
+`content_tsv @@ plainto_tsquery` count). Its authoring note says exactly why: *"Asked as 'go to
+university'; the passage says 'alumnus'. No shared content word except the school name."* The signal
+is measuring the gap between the asker's words and the corpus's words. That is paraphrase distance,
+and on a golden set written to test paraphrase robustness it is anti-correlated with the thing we
+wanted.
+
+**Scope: this claim is limited to this corpus by construction.** It is *not* a general claim that
+term absence can never signal unanswerability. It is the claim that on a golden set whose negatives
+were engineered for vocabulary overlap, the signal is structurally blinded, and its apparent firing
+pattern is an artifact of positive-item phrasing. A corpus with vocabulary-disjoint unanswerables
+would be a different measurement.
+
+**Secondary structural note.** Because `idf(0)` is a constant, C2 can only take two values (0.0 or
+6.2577) — it is an indicator, not a continuous signal, and cannot be thresholded finely regardless.
+
+**Evidence:** `chunk73-REPORT.md` §8.1, §5, §7; `chunk73-signals.json` (digest above); absence path
+confirmed on a constructed nonsense term before any 0.0 was trusted.
+
+---
+
 ## 2026-08-31 — RAG Reliability System Step 03 Chunk 7.2: exact brute-force vector search replaces Chroma/HNSW; six carried claims corrected
 
 **Decision:** the vector arm is now exhaustive L2 search over a tracked 260x1024 float32 artifact
