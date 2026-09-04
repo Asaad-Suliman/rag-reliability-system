@@ -13,6 +13,142 @@ Newest entries first.
 
 ---
 
+## 2026-09-04 — the "MEASURED" claim on `PER_CHUNK_OVERHEAD_TOKENS` is RETIRED as OBSERVED FALSE: the value keeps 96, its provenance is NOT ESTABLISHED, and the tripwire's own literals are de-drifted
+
+**Decision:** `PER_CHUNK_OVERHEAD_TOKENS` keeps its value of **96**. The MEASURED claim on it is
+**retired**. The value is labelled **UNVALIDATED ESTIMATE**, provenance **NOT ESTABLISHED**. The
+closing condition is a real measurement via `scripts/validate_token_counter.py` run WITHOUT
+`--skip-headers`, which is **blocked on the renderer's absence**.
+
+**OBSERVED** — the value is unchanged at `app/services/context_budget.py:256`; the diff carries that
+line as context, never as a `-`/`+` line.
+**INFERRED** — that 96 is a *safe* estimate. Nothing in this pass measured it. Retiring the claim
+says only that it was never measured, not that it is wrong.
+
+---
+
+### 1. FINDING — the value never had a derivation
+
+**OBSERVED.** No script, command, or recorded derivation anywhere in this repo produces 96, or the
+23/40/49/69/74 header-token figures cited as its basis. `git log --all -S` on both figure strings
+(`"69, and 74"` and `"23, 40, 49"`) returns exactly one commit, **d7483ed** — the commit that wrote
+the claim. `git log --all --diff-filter=D --name-only` finds no deleted script behind it. The claim
+existed in four places, all prose: the source comment, the chunk 6 entry's table, the `d7483ed`
+commit message, and the vault mirror. No artifact in any of them.
+
+**OBSERVED.** The 2026-08-24 (correction) entry — at `docs/DECISIONS.md:1653-1660` as of `ea70871`,
+before this entry was prepended — retracted **a claim, not a result**: *"A number described as
+measured, where the artifact being measured was never built and 3 of 5 inputs were never written
+down, is not a measurement."* It explicitly left the value untouched: *"nothing in this correction
+says 96 is wrong, only that the claim it was measured is false."*
+
+**OBSERVED.** That correction landed in `DECISIONS.md` and in the runtime guard. It did **not** land
+in the source comment. The false MEASURED comment therefore survived a correction aimed at something
+else, and sat 593 lines above a guard in the same file asserting the opposite. Retired here.
+
+**NOT ESTABLISHED** — where 96 actually came from. It cannot be traced to a command, a script, or a
+recorded derivation, and this entry does not infer an origin from the comment that claimed one.
+
+---
+
+### 2. FINDING — a second defect, independent of the first
+
+**OBSERVED.** The guard's `96` was a **string literal**, and four `_demo()` fixtures passed `96` as
+literals. The tripwire could therefore drift off the very constant it guards: changing the constant
+would have left the guard still printing the old number.
+
+All five sites now derive from `PER_CHUNK_OVERHEAD_TOKENS`, plus the manifest round-trip assert at
+`:784` — same function, same drift class, flagged in the read-only pass and fixed with it rather
+than left as a known gap of the exact kind being closed.
+
+**OBSERVED.** `grep -n "96"` over the whole file now returns exactly one line: `256:
+PER_CHUNK_OVERHEAD_TOKENS = 96`, the constant itself.
+
+**OBSERVED.** The fixtures' *expectations* were de-drifted alongside their budgets. Pinning the
+fixture while leaving `496` / `992` / `8` / `"400 text"` hardcoded would have replaced one drift gap
+with a worse one — a fixture that floats against expectations that do not. `big_tokens` derives from
+`counter.count()` rather than re-deriving `CHARS_PER_TOKEN`.
+
+**OBSERVED.** The guard docstring could not interpolate a constant. The number was removed from its
+prose rather than performing `__doc__` surgery to make a docstring compute.
+
+---
+
+### 3. BLAST RADIUS
+
+**OBSERVED.** `app/services/evaluation.py` and `app/services/retrieval.py` do not import
+`app.services.context_budget` at all. The 12-figure gate, `_PRE_RERANK_DIGEST`, and the class-1 miss
+set are unaffected by this constant and by this change.
+
+**OBSERVED.** `usable_budget` (193,488) does not subtract the per-chunk overhead — it is pure
+reserve arithmetic over the other four values, so it is arithmetically independent of 96.
+
+**OBSERVED.** There is exactly one behavioural read: `plan_context` at `:543`. It is **unchanged** —
+the diff produces no hunk anywhere in that function body, jumping from the guard docstring straight
+to `_check_offline`.
+
+**OBSERVED.** One frozen artifact records the value: `docs/chunk7-scores.json:32`, written by
+`budget_manifest()` and read back by nothing.
+
+---
+
+### 4. TRIPWIRE — intact, and its output difference is not a regression
+
+**OBSERVED.** `_demo()` still exits **1** with `ProvenanceHeaderUnmeasured`. stdout is
+**byte-identical** to clean `HEAD`. stderr differs in **three lines only**, all traceback frame line
+numbers: `926->953`, `922->949`, `828->854`. That shift is arithmetic — +27 lines added above the
+raise — not behavioural.
+
+**OBSERVED.** The exception message is **byte-identical** (`cmp` on the final stderr line: equal),
+and is now *derived* from the constant rather than hardcoded.
+
+**This must not be read as a regression.** The tripwire is a deliberate blocking prerequisite for
+chunk 7 and was neither suppressed nor repaired. It stays red until chunk 7's renderer exists and
+its real header formats have been measured.
+
+---
+
+### 5. EXECUTION
+
+**OBSERVED.** One file, `app/services/context_budget.py`, **59 insertions / 32 deletions**. No other
+file in repo or vault was modified by the code change.
+
+**OBSERVED.** One reflow was needed: f-stringifying the guard message pushed a line to 106 characters
+against `line-length = 100`. Split across two string literals; the message text is unaffected, as the
+byte-identical comparison above confirms.
+
+---
+
+### 6. VERIFICATION — all PASS
+
+**OBSERVED**, each with raw output captured this pass:
+
+| check | result |
+|---|---|
+| `_PRE_RERANK_DIGEST` reproduces | PASS — exit 0, pinned baseline, lineage `5db0925`, 8 questions x 2 arms |
+| 12-figure gate, demo | PASS — exit 0 |
+| 12-figure gate, live CLI | PASS — lexical `0.233 0.400 0.567 0.142`, vector `0.833 0.900 1.000 0.700`, hybrid `0.667 0.867 0.967 0.445`; all 12 exact |
+| class-1 miss set | PASS — the 3 recorded misses reproduce: `ood08 1.4131`, `ood01 1.4898`, `ood10 1.4906`, all ANSWER_UNVERIFIED as recorded (`bc1e261`) |
+| `python -m tests.test_far_field_gate` | PASS — exit 0 |
+| `python -m tests.test_query_endpoint` | PASS — exit 0 |
+| `python -m tests.test_vector_search_stability` | PASS — exit 0, 36/36 bitwise-identical across 12 processes |
+| `.venv/bin/pre-commit run --all-files` | PASS — ruff, ruff format, gitleaks, mypy(app) |
+| `mypy --strict app scripts tests` | PASS — no issues in 57 source files |
+| `_demo()` tripwire | PASS — exit 1, `ProvenanceHeaderUnmeasured`, output diffed vs clean HEAD |
+
+---
+
+### 7. CARRIED, NOT RESOLVED
+
+**OBSERVED**, both found during this pass, neither acted on:
+
+1. `docs/chunk5-results.json` lacks the `per_chunk_overhead_tokens` manifest key despite
+   `scripts/chunk5_benchmark.py:206` emitting `budget_manifest(...)` into its manifest.
+2. `09_Memory/SCRATCHPAD.md` has no chunk-7 prerequisites despite `docs/DECISIONS.md:1896` stating
+   they are "listed in SCRATCHPAD".
+
+---
+
 ## 2026-09-04 — the bare name `guardrail` is RETIRED repo-wide: three unrelated senses, three names; the DB column, the architecture prose and every prior entry are UNCHANGED
 
 **Decision:** the bare name `guardrail` is **retired**. It was carrying three
