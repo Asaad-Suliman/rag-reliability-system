@@ -16,6 +16,7 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
 from app.db.session import create_engine, create_session_factory, ping
 from app.documents.status import assert_status_enum_matches_db
+from app.services.embeddings import VoyageEmbedder
 from app.services.reranking import RerankerModelMissing, build_reranker
 from app.services.vector_store import CORPUS_DIR, ExactVectorStore
 
@@ -31,6 +32,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = create_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)
     app.state.vector_store = ExactVectorStore()
+
+    # Same rule as the reranker below: built ONCE here and passed into
+    # `retrieve()` as a parameter. Construction opens no connection and costs
+    # nothing — VoyageEmbedder only reaches the network inside `embed()`.
+    app.state.embedder = VoyageEmbedder(
+        api_key=settings.voyage_api_key.get_secret_value(),
+        model=settings.voyage_model,
+        dimensions=settings.voyage_dimensions,
+    )
 
     # Loaded ONCE, here, and injected into `retrieve()` as a parameter — never
     # per request, and never imported as a module global. An InferenceSession
