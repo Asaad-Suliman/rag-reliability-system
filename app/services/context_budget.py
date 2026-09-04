@@ -3,7 +3,7 @@
 Sits between `retrieval.retrieve()` and a generation step that does not exist
 yet (Chunk 7+). Its job is structural, not statistical: produce a deterministic,
 whole-chunk selection plus an auditable record of every hit dropped for budget
-reasons, so the Guardrail can tell "nothing relevant was retrieved" apart from
+reasons, so the relevance floor can tell "nothing relevant was retrieved" apart from
 "something relevant was retrieved and budgeted out" without re-running retrieval.
 
 **Whole chunks only.** Nothing here truncates, slices, or rebuilds a hit's text.
@@ -271,7 +271,7 @@ class ImpossibleBudget(BudgetError):
     A budget whose reserves meet or exceed its window can only ever produce an
     empty selection, which at a call site is indistinguishable from "retrieval
     found nothing". Failing where the numbers are written keeps that confusion
-    from ever reaching the Guardrail.
+    from ever reaching the relevance floor.
     """
 
 
@@ -373,10 +373,10 @@ class ContextBudget:
 ScoreSource = Literal["rerank", "rrf"]
 """Which score the selection actually ranked on. First-class, never inferred.
 
-Chunk 7's Guardrail thresholds abstention on reranker score. 09_Memory/
+Chunk 7's relevance floor thresholds abstention on reranker score. 09_Memory/
 DECISIONS.md (2026-08-19) records that RRF fuses by RANK POSITION only and is
 structurally incapable of signalling absence: an RRF score of 0.21 means "was
-ranked", not "is weakly relevant". The Guardrail therefore has to be able to
+ranked", not "is weakly relevant". The relevance floor therefore has to be able to
 see `"rrf"` and refuse to calibrate on it, which it can only do if this travels
 on the result rather than being reconstructed from `rerank_score is None`.
 """
@@ -399,7 +399,7 @@ class ExcludedHit:
     """A hit dropped for budget reasons, with what it would have cost.
 
     Carries the whole `RetrievedChunk` rather than a bare id: it is less code
-    than a projection and strictly more information — the Guardrail gets the
+    than a projection and strictly more information — the relevance floor gets the
     reranker score, the provenance, and the text without re-running retrieval.
     """
 
@@ -415,7 +415,7 @@ class ExcludedHit:
 class BudgetedContext:
     """What fits, what did not, and everything needed to reproduce the decision.
 
-    The Guardrail's distinction is answerable from this object alone:
+    The relevance floor's distinction is answerable from this object alone:
 
     | included  | excluded  | meaning                                        |
     |-----------|-----------|------------------------------------------------|
@@ -426,7 +426,7 @@ class BudgetedContext:
     `included` empty with `excluded` non-empty is UNREACHABLE, and that is a
     guarantee rather than an oversight: decision C makes an unfittable single
     hit an error, so every hit fits on its own, so the top-ranked hit is always
-    included. The Guardrail therefore reads "something relevant was budgeted
+    included. The relevance floor therefore reads "something relevant was budgeted
     out" off `excluded` being non-empty — never off `included` being empty —
     and it can rely on the best hit never having been the one dropped.
     """
@@ -522,7 +522,7 @@ def plan_context(
             included=[],
             excluded=[],
             # No hits means no evidence about which source would have been used.
-            # "rrf" is the conservative label: it tells the Guardrail not to
+            # "rrf" is the conservative label: it tells the relevance floor not to
             # calibrate, which is correct when there is nothing to calibrate on.
             score_source="rrf",
             budget=budget,
@@ -736,7 +736,7 @@ def _check_offline(counter: TokenCounter) -> None:
 
     # The top-ranked hit is ALWAYS included -- decision C makes an unfittable
     # single hit an error, so the greedy loop can never drop the best one. This
-    # is what lets the Guardrail read "budgeted out" off `excluded` alone.
+    # is what lets the relevance floor read "budgeted out" off `excluded` alone.
     starved = ContextBudget(
         context_window=600,
         prompt_scaffold_reserve=0,

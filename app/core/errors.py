@@ -18,7 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.core.middleware import REQUEST_ID_HEADER, get_request_id
-from app.services.retrieval import GuardrailInputError
+from app.services.retrieval import FarFieldInputError
 from app.services.vector_store import CorpusUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -152,10 +152,10 @@ async def http_exception_handler(request: Request, exc: Exception) -> Response:
     )
 
 
-async def guardrail_input_handler(request: Request, exc: Exception) -> Response:
-    """`GuardrailInputError` -> 503 UPSTREAM_UNAVAILABLE, never a 500.
+async def far_field_input_handler(request: Request, exc: Exception) -> Response:
+    """`FarFieldInputError` -> 503 UPSTREAM_UNAVAILABLE, never a 500.
 
-    503, not 500: nothing crashed and no code path is broken. The Guardrail was
+    503, not 500: nothing crashed and no code path is broken. The far-field gate was
     handed a retrieval it cannot judge — empty hits, or a top hit with no vector
     distance, which is what a degraded or unloaded vector arm produces. That is a
     dependency in a bad state, which is exactly what UPSTREAM_UNAVAILABLE and the
@@ -164,11 +164,11 @@ async def guardrail_input_handler(request: Request, exc: Exception) -> Response:
     catch-all handler's opaque "An internal error occurred."
 
     Not a 200 with a verdict either: inventing ABSTAIN or UNVERIFIED from absent
-    evidence is precisely what `GuardrailInputError` exists to prevent, and it
+    evidence is precisely what `FarFieldInputError` exists to prevent, and it
     would reach the client indistinguishable from a real judgement.
     """
     logger.warning(
-        "guardrail could not judge the retrieval",
+        "far-field gate could not judge the retrieval",
         extra={"path": request.url.path, "reason": str(exc)},
     )
     return error_response(
@@ -229,7 +229,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> Respo
 
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
-    app.add_exception_handler(GuardrailInputError, guardrail_input_handler)
+    app.add_exception_handler(FarFieldInputError, far_field_input_handler)
     app.add_exception_handler(CorpusUnavailableError, corpus_unavailable_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)

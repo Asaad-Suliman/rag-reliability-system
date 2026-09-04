@@ -10,7 +10,7 @@ function in isolation).
 would embed the question, which costs money and needs the network, and would
 read `tests/fixtures/query_embeddings.json`, which is untracked and rewritten on
 any cache miss. Everything downstream of the stub is the committed code path:
-`guardrail()`, the response model, the router, the validators, the handlers.
+`far_field_gate()`, the response model, the router, the validators, the handlers.
 Distances are literals quoted from commit `bc1e261`.
 
 $0 and offline. No Postgres, no vector store, no embedder, no reranker.
@@ -29,7 +29,7 @@ from app.api.v1.router import api_router
 from app.core.errors import register_exception_handlers
 from app.core.middleware import RequestIDMiddleware
 from app.schemas.query import MAX_QUESTION_CHARS
-from app.services.retrieval import GUARDRAIL_FAR_FIELD_DISTANCE, Retrieval, RetrievedChunk
+from app.services.retrieval import FAR_FIELD_ABSTAIN_DISTANCE, Retrieval, RetrievedChunk
 
 # Quoted from commit `bc1e261`. IN_BAND is a01's top-1 distance minus a hair —
 # a01 itself is the constant and is refused. FAR_FIELD is the largest class-1
@@ -126,10 +126,10 @@ def main() -> None:
         )
 
     print("\nboundary is inclusive — the constant itself refuses:")
-    with _client(GUARDRAIL_FAR_FIELD_DISTANCE) as client:
+    with _client(FAR_FIELD_ABSTAIN_DISTANCE) as client:
         body = client.post("/api/v1/query", json={"question": "boundary"}).json()
         assert body["verdict"] == "ABSTAIN_OUT_OF_DOMAIN", body
-        print(f"  {GUARDRAIL_FAR_FIELD_DISTANCE} -> {body['verdict']}")
+        print(f"  {FAR_FIELD_ABSTAIN_DISTANCE} -> {body['verdict']}")
 
     print("\nrejected at the model level, contract-shaped 422:")
     with _client(IN_BAND) as client:

@@ -1,4 +1,4 @@
-"""Query endpoint — retrieval plus the far-field Guardrail. No generation.
+"""Query endpoint — retrieval plus the far-field gate. No generation.
 
 **Before any deployment this route needs authentication, rate limiting and
 CORS. None of the three exists in this codebase** — see `app/core/security.py`,
@@ -20,9 +20,9 @@ from app.services.reranking import RERANK_N, Reranker
 from app.services.retrieval import (
     DEFAULT_CANDIDATE_K,
     DEFAULT_TOP_K,
-    GUARDRAIL_FAR_FIELD_DISTANCE,
-    GuardrailVerdict,
-    guardrail,
+    FAR_FIELD_ABSTAIN_DISTANCE,
+    FarFieldVerdict,
+    far_field_gate,
     retrieve,
 )
 from app.services.vector_store import VectorStore
@@ -33,15 +33,15 @@ router = APIRouter(prefix="/query", tags=["query"])
 
 # Said in prose in the response so a human reading raw JSON gets the verdict's
 # meaning without consulting this source. ANSWER is present for completeness of
-# the type and is not reachable from `guardrail()` — see its docstring.
-_VERDICT_MEANING: dict[GuardrailVerdict, str] = {
+# the type and is not reachable from `far_field_gate()` — see its docstring.
+_VERDICT_MEANING: dict[FarFieldVerdict, str] = {
     "ANSWER": (
         "The retrieved context supports an answer. Not reachable on this path: no "
         "groundedness signal is committed that could license it."
     ),
     "ABSTAIN_OUT_OF_DOMAIN": (
         "Refused. The question's nearest passage is at or beyond "
-        f"{GUARDRAIL_FAR_FIELD_DISTANCE}, the far-field cut, so the corpus is judged not to "
+        f"{FAR_FIELD_ABSTAIN_DISTANCE}, the far-field cut, so the corpus is judged not to "
         "cover this subject. The citations below are what triggered the refusal."
     ),
     "ANSWER_UNVERIFIED": (
@@ -59,7 +59,7 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
     Always 200 on a successful judgement, **including a refusal**:
     ABSTAIN_OUT_OF_DOMAIN is this endpoint working, not failing, so it is not a
     4xx. Only an unjudgeable retrieval is an error, and that leaves as a 503 via
-    `GuardrailInputError` (see `app/core/errors.py`).
+    `FarFieldInputError` (see `app/core/errors.py`).
 
     No answer is produced. Generation is not implemented anywhere in this
     codebase; this route returns the verdict and its citations and stops.
@@ -80,7 +80,7 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
             rerank_n=RERANK_N,
         )
 
-    decision = guardrail(result)
+    decision = far_field_gate(result)
     logger.info(
         "query judged",
         extra={"verdict": decision.verdict, "top_1_distance": decision.top1_distance},

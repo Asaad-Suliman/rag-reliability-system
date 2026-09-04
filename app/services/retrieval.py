@@ -46,7 +46,7 @@ RRF_K = 5
 DEFAULT_TOP_K = 5
 DEFAULT_CANDIDATE_K = 30
 
-# The Guardrail's far-field cut, on the vector arm's top-1 L2 distance.
+# The far-field gate's cut, on the vector arm's top-1 L2 distance.
 #
 # **UNFITTED PLACEHOLDER.** Selection rule, fixed in advance of looking at any
 # candidate-cut outcome table: *the maximum observed answerable top-1 distance;
@@ -66,12 +66,12 @@ DEFAULT_CANDIDATE_K = 30
 # price of the rule's guarantee that no observed answerable question is refused.
 #
 # Decision, evidence digests and the full derivation: commit `bc1e261`.
-GUARDRAIL_FAR_FIELD_DISTANCE = 1.4932
+FAR_FIELD_ABSTAIN_DISTANCE = 1.4932
 
 # Exactly three states, and deliberately no fourth and no confidence score:
 # nothing committed establishes a groundedness signal, so any score this
 # returned would be invented.
-GuardrailVerdict = Literal["ANSWER", "ABSTAIN_OUT_OF_DOMAIN", "ANSWER_UNVERIFIED"]
+FarFieldVerdict = Literal["ANSWER", "ABSTAIN_OUT_OF_DOMAIN", "ANSWER_UNVERIFIED"]
 
 _LEXICAL_SQL = text(
     """
@@ -95,11 +95,11 @@ _LEXICAL_SQL = text(
 )
 
 
-class GuardrailInputError(RuntimeError):
-    """The Guardrail was handed a retrieval it cannot judge.
+class FarFieldInputError(RuntimeError):
+    """The far-field gate was handed a retrieval it cannot judge.
 
     Always fatal, never fallen back from, and deliberately not a verdict. A
-    Guardrail that answers "out of domain" because it could not find a distance
+    far-field gate that answers "out of domain" because it could not find a distance
     is fabricating the refusal it exists to justify, and one that answers
     "unverified" is fabricating the opposite. Both look identical to a real
     decision downstream. The caller must decide what an unjudgeable retrieval
@@ -181,7 +181,7 @@ class Retrieval:
 
 
 @dataclass(frozen=True)
-class GuardrailDecision:
+class FarFieldDecision:
     """The verdict plus the number that produced it.
 
     `top1_distance` is carried so the decision is auditable from the object
@@ -189,18 +189,18 @@ class GuardrailDecision:
     the per-arm ranks on `RetrievedChunk`.
     """
 
-    verdict: GuardrailVerdict
+    verdict: FarFieldVerdict
     top1_distance: float
 
 
-def guardrail(retrieval: Retrieval) -> GuardrailDecision:
+def far_field_gate(retrieval: Retrieval) -> FarFieldDecision:
     """Far-field refusal on the vector arm's top-1 distance. Nothing else.
 
-    `top-1 >= GUARDRAIL_FAR_FIELD_DISTANCE` -> **ABSTAIN_OUT_OF_DOMAIN**;
+    `top-1 >= FAR_FIELD_ABSTAIN_DISTANCE` -> **ABSTAIN_OUT_OF_DOMAIN**;
     otherwise **ANSWER_UNVERIFIED**. `>=` is inclusive at the boundary, so the
     question that set the constant is itself refused.
 
-    **ANSWER is defined in `GuardrailVerdict` but is NOT reachable from this
+    **ANSWER is defined in `FarFieldVerdict` but is NOT reachable from this
     function, and that is the finding, not an oversight.** Reaching it would
     require a committed groundedness signal, and none exists: the retrieval-side
     measurement line established that its signals separate *out-of-domain*, not
@@ -211,35 +211,35 @@ def guardrail(retrieval: Retrieval) -> GuardrailDecision:
     everything below the cut comes back UNVERIFIED, which is the honest carrier
     of that negative result.
 
-    Raises `GuardrailInputError` on any retrieval it cannot judge — empty hits,
+    Raises `FarFieldInputError` on any retrieval it cannot judge — empty hits,
     a top hit carrying no vector distance, or a non-finite distance. See that
     exception for why none of the three is a verdict.
     """
     if not retrieval.hits:
-        raise GuardrailInputError(
+        raise FarFieldInputError(
             "empty retrieval: no hits to judge. This is NOT out-of-domain — the "
             "vector arm may simply not have run (see `arm` in retrieve())."
         )
 
     distance = retrieval.hits[0].vector_distance
     if distance is None:
-        raise GuardrailInputError(
+        raise FarFieldInputError(
             "top hit carries no vector_distance, so there is no distance to "
-            "compare against GUARDRAIL_FAR_FIELD_DISTANCE. The lexical-only arm "
+            "compare against FAR_FIELD_ABSTAIN_DISTANCE. The lexical-only arm "
             "produces this, and it is a caller error, not a far-field query."
         )
 
     if not math.isfinite(distance):
-        raise GuardrailInputError(
+        raise FarFieldInputError(
             f"top-1 vector_distance is {distance!r}, which no comparison against "
-            "GUARDRAIL_FAR_FIELD_DISTANCE can order. NaN in particular compares "
+            "FAR_FIELD_ABSTAIN_DISTANCE can order. NaN in particular compares "
             "False against every bound, so a bare `>=` would silently answer."
         )
 
-    verdict: GuardrailVerdict = (
-        "ABSTAIN_OUT_OF_DOMAIN" if distance >= GUARDRAIL_FAR_FIELD_DISTANCE else "ANSWER_UNVERIFIED"
+    verdict: FarFieldVerdict = (
+        "ABSTAIN_OUT_OF_DOMAIN" if distance >= FAR_FIELD_ABSTAIN_DISTANCE else "ANSWER_UNVERIFIED"
     )
-    return GuardrailDecision(verdict=verdict, top1_distance=distance)
+    return FarFieldDecision(verdict=verdict, top1_distance=distance)
 
 
 async def lexical_search(

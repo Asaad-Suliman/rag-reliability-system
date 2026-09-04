@@ -13,6 +13,256 @@ Newest entries first.
 
 ---
 
+## 2026-09-04 — the bare name `guardrail` is RETIRED repo-wide: three unrelated senses, three names; the DB column, the architecture prose and every prior entry are UNCHANGED
+
+**Decision:** the bare name `guardrail` is **retired**. It was carrying three
+unrelated mechanisms, and no sense keeps it.
+
+| sense | new name | status |
+|---|---|---|
+| far-field top-1 distance abstain cut | `far_field_gate` / `FAR_FIELD_ABSTAIN_DISTANCE` | **renamed this pass, shipped** |
+| OWASP prompt-injection scanner | `injection_scanner` | **name reserved; not implemented** |
+| reranker relevance-score threshold | `relevance_floor` | **renamed this pass, never implemented** |
+
+**OBSERVED** — the three senses and their line assignments, from a fresh
+`git grep -n -i -I guardrail` at `68707ed`: 127 matching lines across 20 files,
+reproducing the prior inventory line for line.
+**INFERRED** — that these are exactly three senses and not two or four. The
+assignment of each individual line to a sense is a judgement, not a measurement.
+
+---
+
+### 1. BASIS — why no sense keeps the bare name
+
+**OBSERVED.** The vault pass `/tmp/chunk81/sense-a-basis.md` was run to test whether
+the OWASP sense holds a prior claim on the name that would let it keep the bare
+form. It does not:
+
+- **Parity, not priority.** Across the 107 working vault lines the OWASP scanner
+  accounts for **34 (32%)** and the far-field cut for **33 (31%)**
+  (`sense-a-basis.md:403-404`, `:501-502`). The two senses are level.
+- **The two-day priority gap is NOT ESTABLISHED.** The claim that the OWASP sense
+  predates the far-field sense by two days does not survive the pass.
+- **The nominated earliest record is the wrong sense.** The line put forward as the
+  OWASP sense's earliest record — `09_Memory/DECISIONS.md:2361`
+  (= repo `docs/DECISIONS.md:2374`) — is **reranker-threshold** text
+  ("…contaminate the Guardrail threshold fit downstream"), not the injection
+  scanner (`sense-a-basis.md:248`, `:443`).
+
+**INFERRED.** With no priority and no majority, there is no principled holder of the
+bare name, so retiring it for all three is the only assignment that does not
+silently privilege one sense over another.
+
+---
+
+### 2. DEFECT — `naming-and-contract.md` is RETIRED as a source
+
+**OBSERVED.** Its sha256 **MATCHES** the pinned value
+(`08135877b57d314bc7132e4b69d1c9937d5d26e7ec64a2b24871a56072ec2919`), so the bytes
+are the bytes that were pinned. That is the whole of what the hash establishes.
+
+**Four of its seven figures do not reproduce:**
+
+| figure | claimed | this pass |
+|---|---|---|
+| total matching lines | 234 | **DIVERGES** |
+| (a) far-field lineage | 167 | **DIVERGES** |
+| (b) OWASP scanner | 49 | **DIVERGES** |
+| (c) ambiguous / other | 18 | **DIVERGES** |
+| mechanical cost, lines | ~60 | AGREES |
+| Python files touched | 6 | AGREES |
+| production call sites | 1 | AGREES |
+
+**OBSERVED.** Its (a)/(b)/(c) split states **no assignment rule** — the reader is
+given three buckets and no criterion for placing a line in one of them. It is
+unmethodized hand classification presented as a count.
+
+**OBSERVED.** Its 234 total is substantially **self-counting**: **127 of the 234 hits
+are lines inside the document itself** (`sense-a-basis.md:518`). A report that
+supplies over half its own evidence is measuring its own prose.
+
+**NOT ESTABLISHED.** Whether its repo count was taken over a working tree that
+already contained the report. If it was, the repo half is contaminated the same way.
+
+**INFERRED.** Pinning a hash pins bytes, not accuracy. A matching digest over a
+document whose figures do not reproduce is a reproducibility guarantee attached to
+the wrong property. `naming-and-contract.md` is retired as a source and is not cited
+by this entry for any figure.
+
+---
+
+### 3. DEFECT — API Contract 1.1.0 does not exist as a document
+
+**OBSERVED.** The contract is **v1.0.0, dated 2026-08-18** — frontmatter reads
+`version: 1.0.0`, the H1 reads `# API Contract v1.0.0`, and the changelog holds a
+single row (`1.0.0 | 2026-08-18 | Initial contract`).
+
+**OBSERVED.** "1.1.0" exists only as an **approved-but-unapplied amendment**, recorded
+at `09_Memory/DECISIONS.md:2224` (= repo `docs/DECISIONS.md:2237`), *"API Contract
+1.1.0 amendment: APPROVED, NOT YET APPLIED"*, whose own body states *"`API Contract.md`
+still reads 1.0.0 and must be edited when the reranker is wired into the response
+path."* It names `guardrail` once, inside a §5.1 field list, and **defines nothing
+about it**.
+
+**INFERRED.** The chunk 8.1 scope line *"apply API Contract 1.1.0"* was therefore
+written against a document that is not there. Any work scoped to it is scoped to an
+approval record, not a specification.
+
+---
+
+### 4. DEFECT — three line-citation drifts in `naming-and-contract.md`
+
+**OBSERVED.** Three citations point one or two lines off target:
+
+| cited | actual | quoted string |
+|---|---|---|
+| `Step 03 — Agents.md:96` | `:98` | "Emit `refused_no_context` when nothing clears the relevance floor" |
+| `_Overview.md:39` | `:38` | "Low score → `partial` or `ungrounded` verdict" |
+| the table range | shifted | — |
+
+**OBSERVED.** Every quoted string checks out verbatim at the corrected line.
+**INFERRED.** Off-by-small line drift, not fabrication — but it is a fourth
+independent reason the document is not usable as a citation source without
+re-verification.
+
+---
+
+### 5. SUPERSEDES — this entry does not edit anything
+
+**OBSERVED.** Three pushed commit subjects name the retired symbol:
+`68707ed` *"…gated by the Guardrail"*, `7dffb81` *"…add the Guardrail far-field
+abstention…"*, `bc1e261` *"…pin unfitted far-field placeholder"* (body). All three are
+reachable from `origin/main`. They **stand as written**; this entry supersedes them.
+
+**OBSERVED.** The `bc1e261` entry (this file, the 2026-09-04 Chunk 7.5 entry, plus its
+supersede annotation) names the retired symbol 11 times and is **unedited**.
+
+**OBSERVED.** `DECISIONS.md` received **zero edits** in this pass. All 24 of its hits
+are dated historical records of decisions made under the name in force at the time,
+and the file has **no standing-policy section** — it is append-only dated entries,
+newest first. Rewriting any of them would make the log claim a name was in use before
+it existed.
+
+---
+
+### 6. EXECUTION RECORD
+
+**OBSERVED.** 71 lines across 9 files; **71 insertions / 71 deletions** — a pure 1:1
+substitution, no line added or removed anywhere. Every one of the 71 was checked
+against its expected prior text **before** any write; **zero mismatches**.
+
+**OBSERVED — the 6-line delta against the plan's 65 is established from the diff**,
+by differencing the plan's edit list against `git diff -U0`. It is exactly:
+
+```
+app/services/context_budget.py:6, 274, 402, 418, 429, 739
+```
+
+the six lines the plan left **ambiguous** and a later amendment assigned to
+`relevance_floor`. It is **not** the satellite renames (`FarFieldVerdict`,
+`FarFieldDecision`, `FarFieldInputError`, `far_field_input_handler`) — those were
+already inside the plan's 65.
+
+**INFERRED.** Those six lines name the consumer of `BudgetedContext`. The far-field
+gate is ruled out affirmatively — it takes a `Retrieval`, reads
+`hits[0].vector_distance` and nothing else, and never receives a `BudgetedContext` —
+and `context_budget.py:402` independently pins the survivor by naming the reranker
+score outright.
+
+**OBSERVED.** The plan predicted wrap edits at `app/core/errors.py:159` and
+`app/services/retrieval.py:101`. **Neither was needed**; both lines are unmodified.
+The renames absorbed into the existing wraps at 83 and 85 characters, under ruff's
+100-character limit.
+
+**OBSERVED.** `FarFieldVerdict` and `FarFieldDecision` are not a wrapper pair and were
+renamed as-is with no refactor: the first is a `Literal` alias over the three verdict
+strings, the second a frozen dataclass carrying a verdict **plus** `top1_distance`.
+
+**OBSERVED.** The verdict strings `ANSWER` / `ABSTAIN_OUT_OF_DOMAIN` /
+`ANSWER_UNVERIFIED` contain no case-form of the retired token and are **unchanged**.
+They are the wire contract, they are pinned in the unamendable `bc1e261` entry, and
+they name outcomes rather than mechanisms.
+
+**OBSERVED — residue, 11 lines, all expected, none beyond:**
+
+```
+README.md:16, 31, 56, 367                    architecture prose, deferred
+app/agents/__init__.py:1                     architecture prose, deferred
+scripts/validate_token_counter.py:195        budget overflow, no sense fits
+scripts/chunk7_scores.py:8, 296, 635, 767    quoted record + JSON emitters, frozen
+scripts/chunk5_benchmark.py:290              JSON emitter, frozen
+```
+
+---
+
+### 7. DEFERRED — not resolved by this entry
+
+- **`messages.guardrail` JSONB column**, applied at alembic `0002` head
+  (`alembic/versions/0002_pipeline_core_users_documents_chunks_.py:166`,
+  `app/db/models/message.py:36`). Needs its own migration **and a decision on what the
+  payload means** first — with three senses retired into three names, it is not
+  established which one the column was meant to record. **OBSERVED:** no application
+  code reads or writes it, so deferring costs nothing at runtime.
+- **`app/agents/__init__.py:1` and `README.md:16, 31, 56, 367`** — architecture prose
+  in which one pipeline stage fuses the injection and abstention jobs. Splitting it is
+  an architecture decision, not a rename. **`README.md:31-33` remains a carried
+  defect**, and `README.md:56` is now additionally stale: it marks the stage "Planned,
+  not implemented" when the far-field half ships.
+- **`scripts/chunk7_scores.py:8, 296, 635, 767` and `scripts/chunk5_benchmark.py:290`** —
+  frozen. `:8` is a verbatim quotation of a historical DECISIONS entry; the other four
+  are string literals that emit `docs/chunk7-scores.json` and `docs/chunk5-results.json`,
+  so editing them would desynchronise the scripts from their recorded output.
+- **`scripts/validate_token_counter.py:195`** — concerns budget overflow reaching the
+  abstention stage. **None of the three senses covers it.** Left as found.
+- **Corpus JSON** (`app/corpus/corpus_vectors.json`, 11 lines / 15 occurrences) —
+  untouched by construction. The word appears in the ingested source document's own
+  prose; the embeddings were computed from that text and are pinned by
+  `vectors_sha256`.
+
+---
+
+### 8. VERIFICATION — all PASS
+
+**OBSERVED.** Run after the edits, before the commit:
+
+| check | result |
+|---|---|
+| residue grep | PASS — 11 lines, all expected |
+| tight grep (`app/services app/api app/core app/schemas tests`) | PASS — empty |
+| old-identifier grep | PASS — empty |
+| `_PRE_RERANK_DIGEST` (8 questions × 2 arms, 560 hits) | PASS — byte-identical |
+| 12-figure gate, `evaluation._demo()` | PASS |
+| 12-figure gate, live `python -m app.cli evaluate` | PASS — all 12 exact |
+| pinned class-1 miss set (ood08 1.4131, ood01 1.4898, ood10 1.4906) | PASS — all `ANSWER_UNVERIFIED` |
+| `python -m tests.test_far_field_gate` | PASS |
+| `python -m tests.test_query_endpoint` | PASS |
+| `python -m tests.test_vector_search_stability` | PASS — 36/36 across 12 processes |
+| `pre-commit run --all-files` | PASS |
+| `mypy .` strict, 60 source files | PASS |
+
+**OBSERVED.** Postgres was up and healthy (`rag-postgres-dev`, `127.0.0.1:5432`), so the
+12-figure gate ran **for real** against the live corpus rather than being skipped. The
+recorded figures reproduced exactly: lexical `0.233 0.400 0.567 0.142`, vector
+`0.833 0.900 1.000 0.700`, hybrid `0.667 0.867 0.967 0.445`.
+
+---
+
+### 9. PRE-EXISTING — not caused by this pass
+
+Both confirmed by stashing to clean `68707ed` and re-running. **OBSERVED:**
+
+- **`app/services/context_budget.py` `_demo()` exits 1** with
+  `ProvenanceHeaderUnmeasured`, a deliberate tripwire that says so in its own message
+  (*"Build chunk 7's renderer … then delete this check"*). Identical exit code and
+  message at clean HEAD, and the demo's full output is **byte-identical** before and
+  after the edits.
+- **`ruff format --check` flags `docs/PLAN-step03-chunk1-status.md`**, a markdown file
+  containing Python code blocks that this pass never touched. Same single-file
+  complaint at clean HEAD. `pre-commit`'s `ruff format` hook passes because it is
+  scoped to Python files.
+
+---
+
 ## 2026-09-04 — Chunk 7.5: the retrieval-side measurement line is CLOSED; classes 2–7 are NOT authored, and the Guardrail carries an UNFITTED far-field placeholder
 
 **Decision:** the retrieval-side measurement line is **closed**. **Chunk 7.4

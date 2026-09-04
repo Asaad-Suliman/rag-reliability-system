@@ -70,7 +70,7 @@ ABSTENTION_TOP_K = 1
 # retriever actually surfaced the near_miss_to span. If it did not, the system
 # abstained because retrieval found nothing, and counting that as a correct
 # abstention is a retrieval failure scored as a pass — it inflates the rate and
-# contaminates the Guardrail threshold fitted from it downstream.
+# contaminates the relevance floor fitted from it downstream.
 ABSTAINED = "ABSTAINED"  # span retrieved, system abstained — correct
 ANSWERED = "ANSWERED"  # span retrieved, system answered — confabulation, failure
 UNSCORED = "UNSCORED"  # span not retrieved — no verdict is available either way
