@@ -233,18 +233,26 @@ QUERY_RESERVE = 512
 ANSWER_RESERVE = 4_000
 
 # The provenance header the Chunk 7 renderer will emit per included chunk, so
-# the model can cite. MEASURED, not asserted: five plausible header formats were
-# rendered at this corpus's widest real values (page 247, char_end 271256, a
-# 33-character filename, a 30-character ULID chunk id) and counted with the
-# reference tokenizer -- 23, 40, 49, 69, and 74 tokens. 96 sits above that
-# observed maximum with room for a format Chunk 7 has not chosen yet.
+# the model can cite.
 #
-# Sized against the REFERENCE tokenizer, not against `HeuristicCharCounter`:
-# the heuristic scored those same headers at 20-44, i.e. it under-counts
-# ID-dense text. See CHARS_PER_TOKEN.
+# UNVALIDATED ESTIMATE. Its PROVENANCE IS NOT ESTABLISHED. No script, command,
+# or recorded derivation anywhere in this repo produces this value, or the
+# 23/40/49/69/74 header-token figures once cited as its basis: `git log --all
+# -S` on those figures returns exactly one commit, d7483ed -- the commit that
+# wrote the claim. No deleted script stands behind it either. An earlier
+# version of this comment called the value MEASURED; that is false, and this
+# comment replaces it.
 #
-# BINDING CONSTRAINT ON CHUNK 7: the renderer's actual header must fit within
-# this value, and Chunk 7 must assert that it does.
+# The 2026-08-24 DECISIONS.md correction retracted the CLAIM, not a result,
+# because no measurement ever occurred: the renderer the value was supposedly
+# measured against does not exist, and 3 of the 5 header formats cited never
+# had a literal template on record. The value itself is unchanged -- unsourced
+# is not the same as wrong -- and stays in force as a working estimate.
+#
+# CLOSING CONDITION: a real measurement of chunk 7's renderer's actual header
+# formats, via `scripts/validate_token_counter.py` run WITHOUT
+# `--skip-headers`. Blocked until that renderer exists. Until then `_demo()`
+# fails unconditionally -- see `ProvenanceHeaderUnmeasured`.
 PER_CHUNK_OVERHEAD_TOKENS = 96
 
 # Measured 2026-08-24 against the live corpus (260 chunks, document
@@ -305,10 +313,10 @@ class ProvenanceHeaderUnmeasured(RuntimeError):
     Raised unconditionally by `_check_provenance_header_pending` at the end
     of every `_demo()` run. See that function for the full story: the
     2026-08-24 DECISIONS.md correction RETRACTED the claim that
-    `PER_CHUNK_OVERHEAD_TOKENS = 96` was measured — the renderer it was
+    `PER_CHUNK_OVERHEAD_TOKENS` was measured — the renderer it was
     supposedly measured against does not exist, and 3 of the 5 recorded
-    header formats never had a literal template on record. 96 is now an
-    UNVALIDATED ESTIMATE. This stays red — `uv run python -m
+    header formats never had a literal template on record. The constant is
+    an UNVALIDATED ESTIMATE. This stays red — `uv run python -m
     app.services.context_budget` cannot pass clean — until chunk 7's real
     renderer exists and `scripts/validate_token_counter.py` (without
     `--skip-headers`) has measured its real header formats against
@@ -699,50 +707,62 @@ def _check_offline(counter: TokenCounter) -> None:
     for hit in forward.included:
         assert hit is by_id[hit.chunk_id], "a hit was copied or rebuilt"
 
+    # Every budget and every expected figure in the four fixtures below derives
+    # from PER_CHUNK_OVERHEAD_TOKENS and from `counter` itself, so a change to
+    # the constant moves the fixtures with it instead of silently invalidating
+    # them. Pinning one side and not the other is the drift this closes.
+    overhead = PER_CHUNK_OVERHEAD_TOKENS
+    big_tokens = counter.count("x" * 1_400)
+    big_cost = big_tokens + overhead
+    small_tokens = counter.count("w" * 10)
+    small_cost = small_tokens + overhead
+    tight_slack = 8  # left after two big hits: far too little for a third
+    roomier_slack = 9  # ...and after the small one too
+
     # (3) + (7): a binding budget excludes rather than truncates, and records what it dropped
     tight = ContextBudget(
-        context_window=1_000,
+        context_window=2 * big_cost + tight_slack,
         prompt_scaffold_reserve=0,
         query_reserve=0,
         answer_reserve=0,
-        per_chunk_overhead_tokens=96,
+        per_chunk_overhead_tokens=overhead,
     )
     big = [
-        _fake_hit("chk_1", "x" * 1_400, rerank_score=3.0),  # 400 + 96 = 496
-        _fake_hit("chk_2", "y" * 1_400, rerank_score=2.0),  # 496 -> 992 total, fits
-        _fake_hit("chk_3", "z" * 1_400, rerank_score=1.0),  # would be 1488, does not
+        _fake_hit("chk_1", "x" * 1_400, rerank_score=3.0),  # big_cost
+        _fake_hit("chk_2", "y" * 1_400, rerank_score=2.0),  # 2 * big_cost total, fits
+        _fake_hit("chk_3", "z" * 1_400, rerank_score=1.0),  # would be 3 * big_cost, does not
     ]
     packed = plan_context(big, tight, counter)
     assert [h.chunk_id for h in packed.included] == ["chk_1", "chk_2"], packed.included
     assert [e.hit.chunk_id for e in packed.excluded] == ["chk_3"]
-    assert packed.excluded[0].score == 1.0 and packed.excluded[0].tokens == 496
-    assert packed.tokens_used == 992 and packed.tokens_remaining == 8
+    assert packed.excluded[0].score == 1.0 and packed.excluded[0].tokens == big_cost
+    assert packed.tokens_used == 2 * big_cost and packed.tokens_remaining == tight_slack
     assert packed.included[0].text == "x" * 1_400, "text must never be truncated"
 
     # a smaller later chunk still fits after a larger one was skipped -- the loop
     # must not stop at the first hit that does not fit, or it understates the budget
     roomier = ContextBudget(
-        context_window=1_100,
+        context_window=2 * big_cost + small_cost + roomier_slack,
         prompt_scaffold_reserve=0,
         query_reserve=0,
         answer_reserve=0,
-        per_chunk_overhead_tokens=96,
+        per_chunk_overhead_tokens=overhead,
     )
-    mixed_sizes = [*big, _fake_hit("chk_4", "w" * 10, rerank_score=0.5)]  # 3 + 96 = 99
+    mixed_sizes = [*big, _fake_hit("chk_4", "w" * 10, rerank_score=0.5)]  # small_cost
     spill = plan_context(mixed_sizes, roomier, counter)
     assert [h.chunk_id for h in spill.included] == ["chk_1", "chk_2", "chk_4"], spill.included
     assert [e.hit.chunk_id for e in spill.excluded] == ["chk_3"]
-    assert spill.tokens_used == 496 + 496 + 99
+    assert spill.tokens_used == 2 * big_cost + small_cost
 
     # The top-ranked hit is ALWAYS included -- decision C makes an unfittable
     # single hit an error, so the greedy loop can never drop the best one. This
     # is what lets the relevance floor read "budgeted out" off `excluded` alone.
     starved = ContextBudget(
-        context_window=600,
+        context_window=2 * big_cost - 1,  # room for one big hit, one token short of two
         prompt_scaffold_reserve=0,
         query_reserve=0,
         answer_reserve=0,
-        per_chunk_overhead_tokens=96,
+        per_chunk_overhead_tokens=overhead,
     )
     out = plan_context([big[1], big[2]], starved, counter)
     assert [h.chunk_id for h in out.included] == ["chk_2"], out.included
@@ -755,18 +775,24 @@ def _check_offline(counter: TokenCounter) -> None:
 
     # a single hit that cannot fit AT ALL is an invariant violation, never a drop
     too_small = ContextBudget(
-        context_window=400,
+        context_window=big_tokens,  # short of big_cost by exactly the overhead
         prompt_scaffold_reserve=0,
         query_reserve=0,
         answer_reserve=0,
-        per_chunk_overhead_tokens=96,
+        per_chunk_overhead_tokens=overhead,
     )
     try:
         plan_context(big, too_small, counter)
     except ChunkExceedsBudget as exc:
         message = str(exc)
         # names the chunk, its true cost, the split, and the budget it blew
-        for expected in ("chk_1", "496 tokens", "400 text", "96 overhead", "budget is 400"):
+        for expected in (
+            "chk_1",
+            f"{big_cost} tokens",
+            f"{big_tokens} text",
+            f"{overhead} overhead",
+            f"budget is {big_tokens}",
+        ):
             assert expected in message, f"{expected!r} missing from:\n{message}"
     else:
         raise AssertionError("ChunkExceedsBudget not raised for an oversized hit")
@@ -781,7 +807,7 @@ def _check_offline(counter: TokenCounter) -> None:
         "prompt_scaffold_reserve": 2_000,
         "query_reserve": 512,
         "answer_reserve": 4_000,
-        "per_chunk_overhead_tokens": 96,
+        "per_chunk_overhead_tokens": PER_CHUNK_OVERHEAD_TOKENS,
         "usable_budget": 193_488,
     }, block
 
@@ -826,8 +852,9 @@ def _check_provenance_header_pending() -> None:
     `_demo()` rather than a comment someone can skim past.
     """
     raise ProvenanceHeaderUnmeasured(
-        "PER_CHUNK_OVERHEAD_TOKENS=96 is an UNVALIDATED ESTIMATE, not a "
-        "measured figure — see docs/DECISIONS.md, 2026-08-24 (correction), "
+        f"PER_CHUNK_OVERHEAD_TOKENS={PER_CHUNK_OVERHEAD_TOKENS} is an "
+        "UNVALIDATED ESTIMATE, not a measured figure — see docs/DECISIONS.md, "
+        "2026-08-24 (correction), "
         "which RETRACTS the earlier chunk 6 entry's claim that it was "
         '"MEASURED, not asserted." No renderer that emits a provenance '
         "header exists in this codebase yet, and 3 of the 5 header formats "
