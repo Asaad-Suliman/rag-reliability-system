@@ -8,7 +8,7 @@ into chunk 7") makes this run its precondition:
     "Chunk 7 may not fit a Guardrail threshold on reranker score without first establishing how
      often the cross-encoder demotes a correct chunk, and by how much."
 
-Nothing here proposes a cutoff, writes Guardrail code, or touches abstention logic.
+Nothing here proposes a cutoff, writes relevance-floor code, or touches abstention logic.
 
 Three populations, scored with the reranker active, on the **vector** (primary) and **hybrid** arms:
 

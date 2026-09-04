@@ -1,4 +1,4 @@
-"""Query payloads — the retrieval-side Guardrail's request and response shape.
+"""Query payloads — the retrieval-side far-field gate's request and response shape.
 
 There is deliberately **no answer field**. No generation step is committed
 anywhere in this codebase (`llm_api_key` is configured but read only by the
@@ -12,7 +12,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.context_budget import CORPUS_MAX_CHUNK_CHARS
-from app.services.retrieval import GuardrailVerdict
+from app.services.retrieval import FarFieldVerdict
 
 # The longest question this system will accept, in characters.
 #
@@ -80,7 +80,7 @@ class QueryResponse(BaseModel):
     trust.
     """
 
-    verdict: GuardrailVerdict
+    verdict: FarFieldVerdict
     verdict_meaning: str
     top_1_distance: float
     citations: list[CitationOut]
