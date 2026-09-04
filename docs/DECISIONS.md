@@ -13,6 +13,222 @@ Newest entries first.
 
 ---
 
+## 2026-09-05 — `messages.guardrail` records the `injection_scanner` sense: SUPERSEDES the `ea70871` §7 claim that its sense is not established; column LEFT IN PLACE, no migration
+
+> **Line-citation convention for this entry.** Every `docs/DECISIONS.md:N` below is pinned to
+> **`7f096e3`**, the revision immediately before this entry was written. Prepending an entry shifts
+> every line number beneath it, so an unpinned self-citation is stale the moment it is committed —
+> the same discipline `ea70871` used, and the reason its own `:2224` pointer needed re-resolving
+> (see CITATION DRIFT below).
+
+**Decision:** `messages.guardrail` is **left in place**. **No migration.** The column records the
+**`injection_scanner`** sense and is correctly shaped for it. It is **unbuilt, not dead** —
+`app/agents/` is empty because that agent is planned, not abandoned.
+
+**OBSERVED** — "dead" and "not yet built" have the same grep signature and different dispositions.
+`README.md:56` marks the stage *"Planned, not implemented"* and `README.md:367` records `agents/` as
+*"empty"*. Neither says abandoned.
+
+---
+
+### 1. SUPERSEDES A FALSE CLAIM
+
+`docs/DECISIONS.md:336-341` as of `7f096e3` — the `ea70871` §7 DEFERRED item — states:
+
+> with three senses retired into three names, it is not
+> established which one the column was meant to record.
+
+**That is OBSERVED FALSE.** The sense is establishable from primary sources and is established in
+§2 below.
+
+**The `ea70871` entry is NOT edited.** This entry supersedes that one claim and nothing else. Under
+this log's own convention (`docs/DECISIONS.md:1-9` at `7f096e3`) superseded entries are annotated or
+superseded, never rewritten.
+
+**Its other claim stands, OBSERVED, reproduced exactly this pass:**
+
+> **OBSERVED:** no application
+> code reads or writes it, so deferring costs nothing at runtime.
+
+Four commands establish that absence. The decisive one: `grep -rn "Message(" app scripts tests
+--include="*.py"` returns only `app/db/models/message.py:23`, the `class Message(Base)` definition
+itself — **the model is never instantiated anywhere in the codebase.** `Message` is imported only by
+`app/db/models/__init__.py:11`, its own package re-export. No raw SQL names the table, no fixture or
+seed writes it, and `QueryResponse` (`app/schemas/query.py:73`) does not carry the field.
+
+---
+
+### 2. BASIS — six primary sources, the name excluded from the reasoning
+
+The column's name is exactly what was in question, so no link below relies on it. Every link is a
+payload definition or a field binding.
+
+**OBSERVED.** `app/db/models/message.py:1-7` binds the column to the contract:
+
+> ```
+> """`messages` — API Contract §5.1.
+>
+> `citations`, `trust`, `guardrail`, `plan`, and `timings_ms` are JSONB rather than
+> five relational tables: the contract already defines their shape as nested JSON,
+> nothing in the app queries inside them, and Step 03/04 own populating them.
+> ```
+
+The question "which sense does the column record" therefore reduces to "what does §5.1's
+`guardrail` object contain".
+
+**OBSERVED.** `01_Projects/RAG Reliability System/API Contract.md:209-217` defines that object:
+
+> ```
+> "guardrail": {
+>   "status": "pass",
+>   "risk_score": 0.04,
+>   "checks": [
+>     { "id": "LLM01_prompt_injection", "target": "query", "result": "pass", "detail": null },
+>     { "id": "LLM01_prompt_injection", "target": "retrieved_context", "result": "pass", "detail": null },
+>     { "id": "LLM02_sensitive_disclosure", "target": "output", "result": "pass", "detail": null }
+>   ]
+> },
+> ```
+
+`LLM01` / `LLM02` are OWASP LLM Top 10 identifiers — `03_Resources/OWASP LLM Top 10.md:26-27`.
+
+**OBSERVED — the discriminating fact.** `API Contract.md:241` gives the enum:
+
+> `` `guardrail.status`: `pass` · `flagged` (answered, surfaced as a warning) · `blocked`. ``
+
+The shipped `far_field_gate()` returns `ANSWER` / `ABSTAIN_OUT_OF_DOMAIN` / `ANSWER_UNVERIFIED`.
+**No value overlaps.** A far-field verdict cannot occupy this field without violating the contract.
+This rules the `far_field_gate` sense out on shape alone, independently of intent.
+
+**OBSERVED.** `01_Projects/RAG Reliability System/Step 03 — Agents.md:105` binds the payload to the
+same array — *"Map each check to an OWASP LLM ID; return the `checks[]` array from the contract"* —
+and `:102-104` scope it to query, retrieved-chunk, and output scanning. Not one line mentions
+distance, abstention, or out-of-domain.
+
+**OBSERVED, corroborating.** `_Overview.md:37` — *"Prompt-injection scan on query _and_ retrieved
+chunks, OWASP LLM checks, PII"*. `API Contract.md:235` and `:314` tie `refused_blocked` to
+*"injection check `fail`"*, and `app/db/models/message.py:32` carries that same status enum.
+
+**INFERRED** — that no revision since 2026-08-18 changed the intent. The contract is still
+`version: 1.0.0` and the pending 1.1.0 amendment does not touch this field.
+
+**NOT ESTABLISHED** — the same question for `timings_ms.guardrail` (`API Contract.md:222`), a
+separate key in a different column, and for the SSE `event: guardrail` (`:258`, `:272`). Both carry
+the retired bare name. Neither was in scope, and neither is covered by the `docs/DECISIONS.md:335-341`
+deferral list at `7f096e3`.
+
+---
+
+### 3. METHODOLOGY DEFECT — how the gap arose, and the standing note it produces
+
+**OBSERVED.** `docs/DECISIONS.md:225-226` at `7f096e3` records that the `ea70871` pass retired a
+secondary source:
+
+> `naming-and-contract.md` is retired as a source and is not cited
+> by this entry for any figure.
+
+**OBSERVED.** That retired document carried the contract's payload shape —
+`rag-reliability/passes/chunk81-artifacts/naming-and-contract.md:209-213`, *"the `guardrail`
+response object with `LLM01_prompt_injection` checks"*.
+
+**INFERRED.** Retiring the secondary source dropped the finding with it, and `API Contract.md` was
+not re-read directly. This is a reconstruction of how the gap arose, not an observation of intent.
+
+**STANDING METHODOLOGY NOTE — retiring a bad secondary source must trigger a read of the primary,
+not leave a hole.** A retired source's *citations* are suspect; the *facts it pointed at* are not
+retired with it. Discarding both is how a pass converts a citation defect into a false "not
+established". Applies to any future source retirement in this project.
+
+**Related correction, OBSERVED.** Earlier passes recorded that **"API Contract 1.1.0 does not
+exist"**. That remains **true** — `docs/DECISIONS.md:231-234` at `7f096e3` establishes the contract
+is v1.0.0 and 1.1.0 exists only as an approved-unapplied amendment. But `API Contract.md` **itself
+does exist**, at v1.0.0, and **does define §5.1** including the `guardrail` object quoted above.
+Prior phrasing blurred "version 1.1.0 does not exist" with "the contract does not define this
+field". The first is true; the second is false.
+
+---
+
+### 4. OBSERVED STATE
+
+**Schema.** `alembic/versions/0002_pipeline_core_users_documents_chunks_.py:166`:
+
+> ```
+> sa.Column("guardrail", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+> ```
+
+**Verified against the live catalog, not read off the migration** (`information_schema.columns`,
+`pg_constraint`, `pg_indexes`): type `jsonb`, nullable `YES`, **no default, no check constraint, no
+index**. The table's only constraints are `messages_pkey` and
+`messages_conversation_id_fkey`; its only indexes are the pkey and `ix_messages_conversation_id`.
+Nothing at the schema level constrains the contents.
+
+**Migration state.** `uv run alembic current` → `0002 (head)`; `uv run alembic heads` → `0002
+(head)`. Applied and head, no later revision. `downgrade()` drops the whole table; there is no
+column-level down path.
+
+**Data.** Database reachable, so this is measured, not inferred from the absent write paths:
+
+> ```sql
+> SELECT
+>   (SELECT count(*) FROM messages)                             AS total_rows,
+>   (SELECT count(*) FROM messages WHERE guardrail IS NOT NULL) AS guardrail_non_null
+> ```
+>
+> `total_rows = 0   guardrail_non_null = 0`
+
+**NOT ESTABLISHED** — whether it has *ever* held data. A count of 0 describes the present state of
+one database. `messages` has no audit trail (`audit_events` is written only by the ingestion path,
+`app/services/ingestion.py:27`), so an inserted-then-deleted row would leave no trace this pass
+could find. Emptiness was **not** inferred from the absence of write paths.
+
+---
+
+### 5. DISPOSITIONS NOT TAKEN
+
+**Rename** (to match the sense): needs a new `0003`; **breaking** by the contract's own rule, quoted
+at `docs/DECISIONS.md:2632` at `7f096e3` — *"Changing a field name, status enum, or error code is a
+breaking change."* That is a **major** bump, 1.0.0 → 2.0.0, which the pending 1.1.0 amendment does
+not contemplate. Data migration would be trivial (0 rows), but the versioning event is not.
+
+**Drop** (as dead): needs a new `0003`; **breaking**, and it **contradicts an approved spec line** —
+`Step 03 — Agents.md:138`, *"Every response carries `plan`, `guardrail`, `trust`, `citations`,
+`timings_ms` exactly as in [[API Contract]] §5.1."* Also mis-founded: per the Decision above the
+column is unbuilt, not dead.
+
+**OBSERVED** — both rejected options are runtime-free (0 rows, 0 code paths). Neither was rejected
+for risk of breakage; both were rejected for being contract events with no offsetting benefit.
+
+---
+
+### 6. CITATION DRIFT
+
+**OBSERVED.** The `:2224` reference to the 1.1.0 amendment has drifted, twice. It is now
+`09_Memory/DECISIONS.md:2610` = `docs/DECISIONS.md:2623` at `7f096e3`, and `ea70871`'s own
+cross-reference (`docs/DECISIONS.md:236-237` at `7f096e3`) cites the earlier pair
+*"`09_Memory/DECISIONS.md:2224` (= repo `docs/DECISIONS.md:2237`)"*. One entry, three line numbers,
+all correct at their own moment.
+
+**The cause is structural, not clerical:** this log is newest-first, so every prepended entry shifts
+every line beneath it. **Cite line numbers in this file with a revision pin, as `ea70871` did and as
+this entry's header does, or they go stale on write.** Vault line numbers drift independently of
+repo ones — the two files carry different preambles — so a vault citation needs its own qualifier.
+
+---
+
+### 7. CARRIED, NOT RESOLVED
+
+**OBSERVED**, none acted on:
+
+1. `README.md:31-33` fuses both senses in one paragraph — *"inspects retrieved content before it
+   reaches the model"* (scanner) and *"where a query with no adequate supporting evidence is stopped
+   rather than answered"* (far-field). Already carried at `docs/DECISIONS.md:344-347` at `7f096e3`.
+2. `README.md:56` marks the stage *"Planned, not implemented"* while the far-field half ships.
+3. `timings_ms.guardrail` (`API Contract.md:222`) and the SSE `event: guardrail` (`:258`, `:272`) —
+   the retired bare name in a different column and a different channel, on no deferral list.
+4. The 1.1.0 amendment remains APPROVED, NOT YET APPLIED. Any §5.1 change sequences against it.
+
+---
+
 ## 2026-09-04 — the "MEASURED" claim on `PER_CHUNK_OVERHEAD_TOKENS` is RETIRED as OBSERVED FALSE: the value keeps 96, its provenance is NOT ESTABLISHED, and the tripwire's own literals are de-drifted
 
 **Decision:** `PER_CHUNK_OVERHEAD_TOKENS` keeps its value of **96**. The MEASURED claim on it is
