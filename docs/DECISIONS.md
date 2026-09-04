@@ -13,7 +13,286 @@ Newest entries first.
 
 ---
 
+## 2026-09-04 — Chunk 7.5: the retrieval-side measurement line is CLOSED; classes 2–7 are NOT authored, and the Guardrail carries an UNFITTED far-field placeholder
+
+**Decision:** the retrieval-side measurement line is **closed**. **Chunk 7.4
+phase 1 stands as the final result of that line** — not as its first instalment.
+**Classes 2–7 are NOT authored. Consent event 2 is NOT spent.** No further probe
+text is written, no further embedding is paid for, and no further signal is
+screened on the retrieval side.
+
+**This supersedes the disposition recorded in `docs/DECISIONS.md`
+**"2026-09-03 — Chunk 7.4: the OOD gate PASSES…"**, which stated that "classes
+2–7 are **authorised** to proceed."** That authorisation is withdrawn here. The
+gate's PASS **stands as run** and is not re-verdicted — what changes is the use
+made of it, not the result. The 2026-09-03 entry carries a pointer annotation to
+this entry; **its original text is unchanged**, per the void-convention stated in
+this file's header.
+
+**Why the authorisation is withdrawn, in one line:** the gate proved the families
+can separate *something*, and chunk 7.4's own diagnostic then established that
+what they separate is **corpus distance**, not answerability — so authoring
+classes 2–7 would spend consent event 2 to re-measure a confound this pass has
+already characterised. **INFERRED**, from the OBSERVED figures carried forward in
+§2 below.
+
+---
+
+### 1. What is closed, and what is not
+
+**Closed — OBSERVED scope:** the retrieval-side signal families **A** (distance-
+profile shape), **B** (retrieved-set coherence), **C** (IDF-weighted coverage),
+**E** (perturbation stability), as screening mechanisms for abstention on this
+corpus. Family **G** (reranker score shape) was the control arm and is closed with
+them.
+
+**NOT closed, and untouched by this entry:** the Verifier line. The 2026-09-03
+pre-registration's predicted-negatives on classes 3 and 4 localised abstention for
+those classes to a component that reads retrieved text against the claim; that
+prediction was never tested and is neither confirmed nor refuted here.
+**NOT ESTABLISHED** — nothing in chunk 7.4 or 7.5 measured a Verifier.
+
+---
+
+### 2. FINDING carried forward
+
+Three results are carried forward as the substance of the closed line. All are
+restatements of figures already recorded; no new measurement is introduced by
+this entry.
+
+**(a) The retrieval-side signals separate OUT-OF-DOMAIN, not UNANSWERABLE.**
+Top-1 corpus distance alone classifies the 12 class-1 OOD items against v3's 30
+answerable at **AUROC 0.992 [0.967, 1.000]** — OBSERVED,
+`chunk74-artifacts/inversion-diagnostic.md`. Any signal correlated with that
+quantity inherits the separation without measuring answerability at all.
+
+**(b) The sub-0.2 cluster's correlation with corpus distance COLLAPSES ON
+CONDITIONING.** The nine signals that landed below AUROC 0.2 have mean
+**|pooled r| = 0.590** with top-1 distance, against 0.303 for the other eight;
+that correlation falls to **0.266 within answerable and 0.254 within OOD**.
+`C1_idf_coverage` is the extreme case: **pooled −0.828, within-OOD +0.001**. All
+OBSERVED, `chunk74-artifacts/inversion-diagnostic.md`. A pooled correlation that
+vanishes on conditioning is a between-class shift, not a within-class
+relationship.
+
+**(c) In-domain near-miss unanswerability is NOT distance-separable.** The 6 v3
+near-miss unanswerables have top-1 distance min **1.0201**, q1 **1.1043**, median
+**1.3374**, q3 **1.4920**, max **1.5762**; per question u01 1.0201, u02 1.5762,
+u03 1.2003, u04 1.4979, u05 1.4744, u06 1.0723. Their range straddles both other
+classes — the minimum sits below the answerable median (1.0489) and three of the
+six fall inside the OOD range [1.4131, 1.7829].
+
+**OBSERVED (untracked cache).** These figures are recorded in
+`DevBrain/rag-reliability/passes/chunk74p2-artifacts/phase2-discovery.md`, sha256
+`77670891a1a8632dd581ef4712077431473d369a446f03ea6837415312a9d086`, §"DISTANCE
+BAND — COMPLETED". **Their query vectors come from
+`tests/fixtures/query_embeddings.json`, which is untracked and gitignored
+(`.gitignore:23`) and is rewritten on any cache miss** — so they are not
+reproducible from committed data, and the label is qualified accordingly. The same
+qualification applies to the 30-answerable row. Only the 12 OOD rows trace to a
+committed, sha256-pinned artifact.
+
+**(c) is the load-bearing one.** (a) and (b) say the signals measure the wrong
+thing; (c) says the right thing is not measurable by this route at all — the class
+the Guardrail most needs to catch is the class that sits inside the answerable
+band.
+
+---
+
+### 3. PROHIBITION — threshold fitting on this set is FORBIDDEN
+
+Quoted verbatim from `docs/DECISIONS.md` **"2026-09-03 — PRE-REGISTRATION: the
+abstain mechanism set"**:
+
+> **SCOPE — MECHANISM TRIAGE ONLY. This artifact cannot be used to fit a
+> threshold, and no later reader may repurpose it as one.**
+
+and:
+
+> It is not a validation set, not a calibration set, not a held-out set, and not a
+> source of any number that gets written into Guardrail code.
+
+and:
+
+> **If a future pass wants a threshold, it must build a separate set for that
+> purpose; reusing this one is threshold fitting on triage data and is
+> prohibited.**
+
+**That prohibition is in force and is not relaxed by this entry.**
+
+**A cut sweep was nevertheless performed, and is recorded here so it cannot
+resurface unlabelled.** On 2026-09-04 a sweep of candidate top-1 distance cuts
+from 1.35 to 1.60 in steps of 0.01 was run and written to
+`DevBrain/rag-reliability/passes/chunk75-artifacts/cut-selection.md`, sha256
+`add02d222ce976569bd45f353ec6f2ef77189e22a40b3ae89e2b9bad1e287f4f`.
+
+> **Its per-cut outcome table MUST NOT be used to select any threshold.** No cut
+> was recommended in that document and none is adopted here. A reader who wants a
+> threshold must build the separate set §3's prohibition requires.
+
+**Two STRUCTURAL facts the sweep did establish — properties of the data, not
+outcomes of a cut, and therefore admissible:**
+
+1. **The overlap interval is [1.4131, 1.4932]**, width 0.0801, containing **1 of
+   30 answerable and 3 of 12 OOD**: `a01` at **1.4932** lies *above* all three OOD
+   members `ood08` 1.4131, `ood01` 1.4898, `ood10` 1.4906. OBSERVED.
+2. **No cut achieves 30/30 answerable answered with 12/12 OOD abstained.** This
+   is not a search result over the swept grid — it follows from fact 1, since a01
+   sits above all three overlapping OOD items, and therefore holds at every cut
+   value, inside the swept range and outside it. OBSERVED (fact 1) + INFERRED
+   (the implication).
+
+---
+
+### 4. CONSTANT — `GUARDRAIL_FAR_FIELD_DISTANCE = 1.4932`
+
+**UNFITTED PLACEHOLDER.** Recorded here as a decision; **no constant is committed
+to `app/` or `scripts/` by this entry**, and no Guardrail code, stub or scaffold
+was written.
+
+**The selection rule, stated as the rule and not as the number:**
+
+> **the maximum observed answerable top-1 distance; no observed answerable
+> question is refused.**
+
+**The rule was fixed in advance of consulting the sweep, and the value was NOT
+selected by scanning sweep outcomes.** This is the whole basis on which the
+constant is admissible under §3: a rule that names a single order statistic of
+the negative class is not a fit, because it has no free parameter to fit — it
+reads one value off the data and could have been written down before any sweep
+existed. **Had the value been chosen by looking down the sweep's outcome columns
+for a favourable trade, it would be threshold fitting on triage data and
+prohibited.** It was not, and this sentence is the record of that.
+
+**Status: UNFITTED, pending calibration on a held-out set that does not yet
+exist.** **NOT ESTABLISHED** — no validation set, calibration set or held-out set
+exists for this quantity; §3's prohibition forbids building one from the class-1
+items.
+
+**Known cost, recorded at adoption rather than discovered later — OBSERVED:**
+**3 of the 12 class-1 OOD items fall below the cut and will NOT be refused:**
+
+| id | top-1 distance |
+|---|---|
+| ood08 | 1.4131 |
+| ood01 | 1.4898 |
+| ood10 | 1.4906 |
+
+That is a **25% miss rate on the easiest possible positive class**, and it is the
+price of the rule's guarantee that no observed answerable question is refused. The
+rule was chosen knowing this, not in spite of it.
+
+---
+
+### 5. GUARDRAIL CONTRACT — three states
+
+| state | condition | meaning |
+|---|---|---|
+| **ANSWER** | — | the system answers |
+| **ABSTAIN_OUT_OF_DOMAIN** | top-1 distance **≥** `GUARDRAIL_FAR_FIELD_DISTANCE` | the query is outside the corpus's subject; the system refuses |
+| **ANSWER_UNVERIFIED** | top-1 distance **<** `GUARDRAIL_FAR_FIELD_DISTANCE`, groundedness **NOT ESTABLISHED** | the system answers and says so |
+
+**`ANSWER_UNVERIFIED` is the honest carrier of the negative result.** Everything
+inside the band is returned with its groundedness **NOT ESTABLISHED**, because
+§2(c) established that in-domain unanswerability is not separable by this route.
+**No in-band abstention is claimed.** The Guardrail refuses far-field queries and
+makes no claim at all about the rest — which is what the measurements support, and
+no more.
+
+**The third state exists so the negative result is visible at the API boundary
+rather than buried in this log.** A two-state contract would have to call
+everything below the cut "answered", which would present an unmeasured property as
+a verified one. **INFERRED** — this is a design consequence of §2(c), not itself a
+measurement.
+
+---
+
+### 6. CARRIED DEFECTS — restated so closing the line does not lose them
+
+Closing a line of investigation is where its open defects get dropped. These four
+are restated in full so that does not happen.
+
+1. **Disjunct C is UNIMPLEMENTED in the analysis code.**
+   `chunk73-artifacts/phase3_analyse.py:62` computes `"dead": frac > 0.50` and
+   nothing else; the count of positives inside the interval is computed and stored
+   (`n_pos_in`, `:60`) but never enters the kill test. Chunk 7.4 applied disjunct
+   C in a throwaway driver, not by running that script. **A reader who lifts
+   `phase3_analyse.py` as-is would silently ship the pre-amendment rule.**
+   OBSERVED — `chunk75-artifacts/port-inventory.md` §5.2, sha256
+   `9a0204623ae59e032285f72d162651ea6b99f64cce5f69e7a1323b944a5cd704`.
+2. **The kill-criterion conflict is UNRESOLVED.** The 2026-09-02 METHODOLOGY entry
+   (`docs/DECISIONS.md:641`) writes the disjunct as **"more than half"**; the
+   2026-09-03 pre-registration (`docs/DECISIONS.md:497-511`) tightens it to
+   **≥ 6 of 12 / ≥ 3 of 6 — "exactly half now DIES"**. Both are in force in the
+   log and they differ at exactly half. Chunk 7.4 ran under the tighter reading.
+   **This conflict is NOT resolved here, and binds only if the measurement line is
+   ever reopened** — resolving it now, with no pass pending, would be a rule
+   written against known results. OBSERVED (both texts) + INFERRED (that they
+   conflict).
+3. **The phase 1 measurement path remains UNCOMMITTED.** The signal definitions
+   and the W/C/AUROC criterion live only in the vault, at
+   `chunk73-artifacts/phase2_signals.py` (sha256 `ef89985d…9bff`) and
+   `phase3_analyse.py` (sha256 `aa54b5af…9b49`); neither is under version control,
+   both fail on hard-coded `/tmp` paths, and no committed script runs the authoring
+   probes, embeds a non-golden question set, or scores one against the frozen
+   corpus. **Every chunk 7.3 and 7.4 figure depends on code the repo does not
+   contain.** OBSERVED — `chunk75-artifacts/port-inventory.md` §§1–7.
+4. **The vault/repo DECISIONS divergence is now FOUR entries, plus 21 vault-only.**
+   Repo-only: 2026-08-24 (correction), 2026-08-25, and both 2026-09-03 entries.
+   Vault-only: 21 Agentic-OS entries dated 2026-07-07 to 2026-07-16. OBSERVED —
+   `chunk74p2-artifacts/phase2-discovery.md` §9.1. This entry makes it **five**
+   repo-only. INFERRED: the vault-only 21 are scope difference rather than drift;
+   nothing read states that policy.
+
+---
+
+### NOT ESTABLISHED
+
+- **Any calibrated value for `GUARDRAIL_FAR_FIELD_DISTANCE`.** 1.4932 is an
+  unfitted placeholder from a rule, not a calibrated threshold; the held-out set
+  it needs does not exist and cannot be built from the class-1 items.
+- **Groundedness of anything inside the band.** That is what `ANSWER_UNVERIFIED`
+  records.
+- **Whether the retrieval-side families would separate classes 2–7.** They are not
+  authored; the prediction stands untested and is not resolved by closing the line.
+- **Whether a Verifier separates classes 3 and 4.** Predicted in the 2026-09-03
+  pre-registration, never measured.
+- **Whether any of this generalises past this 260-chunk corpus and these 42
+  questions.** No second corpus and no held-out set were measured.
+- **Reproducibility of §2(c) and the 30-answerable figures from committed data.**
+  Their vectors come from the untracked cache; see the qualification in §2.
+
+---
+
+**Evidence:**
+`DevBrain/rag-reliability/passes/chunk74-artifacts/gate-report.md` sha256
+`93ac4ecc14e2737e88d004e335e1021a7353bf79057a71d25bd9bb6022561056`;
+`chunk74-artifacts/inversion-diagnostic.md` sha256
+`923a0c3031ec77966055116847b45671e7a2b955126b7e917e2e1773eda4c586`;
+`chunk74p2-artifacts/phase2-discovery.md` sha256
+`77670891a1a8632dd581ef4712077431473d369a446f03ea6837415312a9d086`;
+`chunk75-artifacts/port-inventory.md` sha256
+`9a0204623ae59e032285f72d162651ea6b99f64cce5f69e7a1323b944a5cd704`;
+`chunk75-artifacts/cut-selection.md` sha256
+`add02d222ce976569bd45f353ec6f2ef77189e22a40b3ae89e2b9bad1e287f4f`.
+
+Class-1 positives: the 12 items pinned at
+`tests/fixtures/class1_query_vectors.{npy,json}`, `vectors_sha256`
+`91aec7727cc271293cd4bd0c0fe6639d49864e45072206da3f83db040ec79489`; question texts
+frozen at `class1-draft.json` sha256
+`ce159eb4cf2d30fa18fe3105a4314873ae7d8d8358192b13a2c0bae4e64026eb`. Negatives:
+golden set v3's 30 answerable, unchanged by this pass. Gate config as recorded in
+the 2026-09-03 findings entry.
+
+**No code was written, committed or scaffolded by this entry, and no constant was
+added to `app/` or `scripts/`.** The 12-figure corpus-drift tripwire reproduced
+exactly on 2026-09-04 before the sweep was run.
+
+---
+
 ## 2026-09-03 — Chunk 7.4: the OOD gate PASSES — dynamic range EXISTS, and the signals that carry it are measuring DISTANCE FROM THE CORPUS
+
+> **SUPERSEDED IN PART — see 2026-09-04 — "Chunk 7.5: the retrieval-side measurement line is CLOSED; classes 2–7 are NOT authored, and the Guardrail carries an UNFITTED far-field placeholder".** The gate's **PASS stands as run** and is not re-verdicted; what is withdrawn is this entry's disposition that "classes 2–7 are **authorised** to proceed" — they are NOT authored, and consent event 2 is NOT spent. Annotation only; the entry below is unchanged.
 
 **Decision:** the pre-registered OOD-first gate **PASSES**. The retrieval-side
 line of investigation is **NOT DEAD** on this corpus, and classes 2–7 are
