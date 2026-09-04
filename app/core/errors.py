@@ -18,6 +18,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.core.middleware import REQUEST_ID_HEADER, get_request_id
+from app.services.retrieval import GuardrailInputError
+from app.services.vector_store import CorpusUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,58 @@ async def http_exception_handler(request: Request, exc: Exception) -> Response:
     )
 
 
+async def guardrail_input_handler(request: Request, exc: Exception) -> Response:
+    """`GuardrailInputError` -> 503 UPSTREAM_UNAVAILABLE, never a 500.
+
+    503, not 500: nothing crashed and no code path is broken. The Guardrail was
+    handed a retrieval it cannot judge — empty hits, or a top hit with no vector
+    distance, which is what a degraded or unloaded vector arm produces. That is a
+    dependency in a bad state, which is exactly what UPSTREAM_UNAVAILABLE and the
+    readiness endpoint's own 503 already mean here, and it is retryable. A 500
+    would say "this service has a bug" and bury a recoverable condition under the
+    catch-all handler's opaque "An internal error occurred."
+
+    Not a 200 with a verdict either: inventing ABSTAIN or UNVERIFIED from absent
+    evidence is precisely what `GuardrailInputError` exists to prevent, and it
+    would reach the client indistinguishable from a real judgement.
+    """
+    logger.warning(
+        "guardrail could not judge the retrieval",
+        extra={"path": request.url.path, "reason": str(exc)},
+    )
+    return error_response(
+        request,
+        code=ErrorCode.UPSTREAM_UNAVAILABLE,
+        status_code=503,
+        message="The retrieval could not be judged. Retry shortly.",
+    )
+
+
+async def corpus_unavailable_handler(request: Request, exc: Exception) -> Response:
+    """`CorpusUnavailableError` -> 503 UPSTREAM_UNAVAILABLE.
+
+    It **can** reach a request: `ExactVectorStore` loads the corpus lazily
+    (`_get_corpus`), and `query()` is a load site, so a missing, truncated or
+    digest-mismatched artifact surfaces on the first real query rather than at
+    startup — startup only *probes* it and deliberately stays up to report 503.
+    That makes this reachable in exactly the state /health/ready is already
+    describing as 503, so the two agree rather than contradicting each other.
+
+    The message stays generic on purpose: the exception text names filesystem
+    paths and pinned digests, which belong in the log, not in a response.
+    """
+    logger.error(
+        "vector corpus unavailable during a request",
+        extra={"path": request.url.path, "reason": str(exc)},
+    )
+    return error_response(
+        request,
+        code=ErrorCode.UPSTREAM_UNAVAILABLE,
+        status_code=503,
+        message="The vector corpus is unavailable.",
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> Response:
     """Last resort: log the traceback server-side, return only the request id."""
     request_id = request_id_of(request)
@@ -175,6 +229,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> Respo
 
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(GuardrailInputError, guardrail_input_handler)
+    app.add_exception_handler(CorpusUnavailableError, corpus_unavailable_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
