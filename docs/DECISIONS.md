@@ -13,6 +13,85 @@ Newest entries first.
 
 ---
 
+## 2026-09-05 — Chunk 8.1 scope line "apply API Contract 1.1.0": CLOSED. Amendment remains approved and pending.
+
+> **Line-citation convention for this entry.** Every path below is repo-root-relative and every
+> citation is pinned to a named revision: source and `docs/DECISIONS.md` citations to **`2feacdd`**,
+> `09_Memory/DECISIONS.md` citations to **`cef64e8`** — the revisions immediately before this entry
+> was written. Prepending an entry shifts every line number beneath it, so an unpinned self-citation
+> is stale the moment it is committed.
+
+**Disposition.** The scope line is closed. The amendment is not promoted, folded, or dropped. It
+remains approved and pending, unapplied. DROP was rejected because it would strand the live Step 04
+`citations[].score` constraint.
+
+---
+
+### 1. The scope line named a non-existent document
+
+"API Contract 1.1.0" does not exist. `API Contract.md` exists at v1.0.0 and defines §5.1. Prior
+entries recording "1.1.0 does not exist" were correct but blurred the two.
+
+### 2. Amendment location
+
+Byte-identical in both trees at `docs/DECISIONS.md:2839-2872` as of `2feacdd` and
+`09_Memory/DECISIONS.md:2826-2859` as of `cef64e8`. Approval by Asaad 2026-08-21 rests solely on the
+amendment's own first sentence — no independent corroboration. **NOT ESTABLISHED.**
+
+### 3. The trigger is stated, not ambiguous
+
+**SUPERSEDES** the earlier finding that it was "genuinely ambiguous, unresolved." The amendment's
+status paragraph states the contract must be edited when the reranker is wired into the response
+path. The earlier reading took the trigger from the rationale paragraph ("the answer still ships")
+instead of the status paragraph.
+
+### 4. NOT FIRED — OBSERVED
+
+§5.1 is the eleven-field message object (`id`, `conversation_id`, `role`, `content`, `status`,
+`citations`, `trust`, `guardrail`, `plan`, `timings_ms`, `created_at`). The shipped route returns the
+four-field `QueryResponse` at `app/schemas/query.py:73` (`verdict`, `verdict_meaning`,
+`top_1_distance`, `citations`), sharing only `citations`.
+
+Neither 1.1.0 item exists: `Retrieval.rerank` is populated at `app/services/retrieval.py:460` and
+discarded by the serving layer; `degraded` has no producer because `RerankError` is deliberately
+uncaught, stated at `app/services/retrieval.py:379`. The sole reranker field reaching the wire is
+`rerank_score`, serialized at `app/api/v1/query.py:102` onto `CitationOut` (declared at
+`app/schemas/query.py:70`); the amendment's own version table assigns `citations[].score` version
+none.
+
+### 5. Testable trigger definition (deliverable)
+
+The trigger fires when the §5.1 message object is served with `timings_ms.rerank` populated and a
+`degraded` array present. `citations[].score` alone does not fire it, per the amendment's own version
+table. Until then the amendment cannot be applied.
+
+### 6. Also recorded
+
+The amendment is silent on §5.3 streaming. The changelog rule at `API Contract.md:16-17` defines
+"breaking" only; "so a minor bump" imports semver the document never establishes. Two of the rule's
+three obligations remain unmet.
+
+---
+
+**Provenance.** A pass report was reported at `/tmp/chunk81d/contract-amendment.md`. That directory
+exists and is empty. `grep -rln` over the vault's
+`/home/asaad/Documents/DevBrain/rag-reliability/passes/` and over `/tmp/` returns no copy of the
+report. Every hit is one of three kinds: the five surviving chunk-8.1 artifacts and prior-session
+scratch copies, both matching on the decision heading; or drafts of this entry, which match only
+because this sentence contains the path string it searches for. The total is not recorded here — it
+drifts with any scratch file written under `/tmp/`. **NOT RECOVERABLE.** This entry rests on direct
+reads of the tree at `2feacdd`, not on that report.
+
+**Lesson (second instance this session).** A pass report is not a durable citation. First instance:
+`ea70871` §7 asserted the `messages.guardrail` sense "is not established" after retiring the
+secondary source without re-reading the primary. Here the trigger was called ambiguous from a summary
+while the amendment's own status paragraph was quotable.
+
+**Lesson (third instance).** A bare filename is not a citation when the repo holds two files of that
+name — `app/api/v1/query.py` and `app/schemas/query.py`. Paths in this entry are repo-root-relative.
+
+---
+
 ## 2026-09-05 — `messages.guardrail` records the `injection_scanner` sense: SUPERSEDES the `ea70871` §7 claim that its sense is not established; column LEFT IN PLACE, no migration
 
 > **Line-citation convention for this entry.** Every `docs/DECISIONS.md:N` below is pinned to
