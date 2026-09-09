@@ -17,17 +17,15 @@ exist only as a comment in `context_budget.py` and as prose in the matching
      difference, not confirming it.
 
   2. the five provenance-header-format token counts (23/40/49/69/74) sizing
-     `PER_CHUNK_OVERHEAD_TOKENS = 96`. No renderer that emits a provenance
-     header exists anywhere in this codebase -- `docs/DECISIONS.md` names it
-     "chunk 7's renderer", future tense, unbuilt. Of the five recorded
-     formats, only two have a literal string on record anywhere
-     (`[filename | page N | chars a-b]` and `[doc_id=... page=... chars=a-b]`);
-     "markdown block", "XML-ish `<source ...>`", and "JSON line" are named
-     but never spelled out. This script reconstructs all five against this
-     corpus's actual widest live values and reports the real max -- clearly
-     labeled per-format as recorded-literal or reconstructed. It does not
-     claim to reproduce the original 96-token derivation, because that
-     derivation is not reproducible from the written record for 3 of 5 rows.
+     `PER_CHUNK_OVERHEAD_TOKENS = 96`. That renderer now exists --
+     `app/services/provenance.py` (chunk 8.2) -- and this script imports its
+     `render_header`/`render_block` rather than reconstructing anything, so
+     what is measured below is the format the generator will actually see.
+     The five reconstructions are gone with the renderer's arrival: it emits
+     one header, the `bracket-kv` literal, so there is no max over five to
+     take. This still does not reproduce the original 96-token derivation --
+     that derivation was never reproducible from the written record for 3 of
+     the 5 rows -- it replaces it with a real measurement of a real format.
 
 Reads the existing `chunks` / `documents` tables, text only. No re-embedding,
 no embedding API call, no network. Requires tiktoken to already be installed
@@ -55,6 +53,7 @@ from app.services.context_budget import (  # noqa: E402
     PER_CHUNK_OVERHEAD_TOKENS,
     HeuristicCharCounter,
 )
+from app.services.provenance import render_block, render_header  # noqa: E402
 from scripts.fetch_tiktoken_cache import DEFAULT_DEST as TIKTOKEN_CACHE_DIR  # noqa: E402
 
 # Recorded by the 2026-08-24 DECISIONS.md entry and mirrored as a comment in
@@ -114,8 +113,8 @@ async def _load_chunks() -> list[dict[str, Any]]:
         rows = (
             await session.execute(
                 sql(
-                    "SELECT c.id AS chunk_id, c.text, c.page, c.char_start, "
-                    "c.char_end, d.filename "
+                    "SELECT c.id AS chunk_id, c.document_id, c.text, c.page, "
+                    "c.char_start, c.char_end, d.filename "
                     "FROM chunks c JOIN documents d ON d.id = c.document_id "
                     "ORDER BY c.id"
                 )
@@ -125,41 +124,6 @@ async def _load_chunks() -> list[dict[str, Any]]:
     await engine.dispose()
     assert chunks, "expected a corpus; is the dev database seeded?"
     return chunks
-
-
-def _render_headers(chunks: list[dict[str, Any]]) -> dict[str, str]:
-    """Five best-effort reconstructions, built from this corpus's actual
-    widest live values -- not the hardcoded example values in DECISIONS.md's
-    2026-08-24 entry, so this stays a live measurement rather than a copy of
-    a stale one. `char_start` is fixed at 0 to match how that entry measured
-    the format ("widest real values"), not a real chunk's actual start.
-    """
-    widest_page = max(c["page"] for c in chunks)
-    widest_end = max(c["char_end"] for c in chunks)
-    widest_filename = max((c["filename"] for c in chunks), key=len)
-    widest_chunk_id = max((c["chunk_id"] for c in chunks), key=len)
-    start = 0
-
-    return {
-        "bracket-pipe [recorded literally in DECISIONS.md]": (
-            f"[{widest_filename} | page {widest_page} | chars {start}-{widest_end}]"
-        ),
-        "bracket-kv [recorded literally in DECISIONS.md]": (
-            f"[doc_id={widest_chunk_id} page={widest_page} chars={start}-{widest_end}]"
-        ),
-        "markdown block [RECONSTRUCTED -- no literal string on record]": (
-            f"**Source:** {widest_filename}, page {widest_page}\n"
-            f"**Chunk:** {widest_chunk_id} (chars {start}-{widest_end})"
-        ),
-        "XML-ish [RECONSTRUCTED -- no literal string on record]": (
-            f'<source chunk_id="{widest_chunk_id}" file="{widest_filename}" '
-            f'page="{widest_page}" chars="{start}-{widest_end}"/>'
-        ),
-        "JSON line [RECONSTRUCTED -- no literal string on record]": (
-            f'{{"chunk_id": "{widest_chunk_id}", "file": "{widest_filename}", '
-            f'"page": {widest_page}, "chars": [{start}, {widest_end}]}}'
-        ),
-    }
 
 
 def _counter_report(chunks: list[dict[str, Any]], encoding: Any) -> float:
@@ -226,32 +190,52 @@ def _counter_report(chunks: list[dict[str, Any]], encoding: Any) -> float:
 
 def _header_report(chunks: list[dict[str, Any]], encoding: Any) -> None:
     """Provenance-header section. Kept separate from `_counter_report` so it
-    can be skipped with `--skip-headers` -- Phase A established that the
-    renderer this measures does not exist yet (docs/DECISIONS.md 2026-08-24
-    correction). Run this once chunk 7's renderer is built.
+    can still be skipped with `--skip-headers`, but the reason for skipping is
+    gone: the renderer this measures now exists
+    (`app/services/provenance.py`), so this is a measurement of the real
+    format rather than the five reconstructions that stood here before.
+
+    One format, not five. `app/services/provenance.py` emits exactly one
+    header, so there is nothing to take a max over. The three formats
+    DECISIONS.md named without a literal template are not reconstructed here —
+    they were never built, and guessing at them measured nothing.
+
+    Measured at this corpus's widest live values (`char_start` pinned to 0, as
+    the 2026-08-24 entry measured it), against an empty body, so the figure is
+    the wrapper cost alone — header, its newline, and the block separator —
+    which is exactly what `PER_CHUNK_OVERHEAD_TOKENS` is meant to bound.
     """
-    print(
-        "\nprovenance header renderer: NOT FOUND in this codebase. "
-        'DECISIONS.md (2026-08-24) calls it "chunk 7\'s renderer" -- unbuilt. '
-        "The five formats below are reconstructed from this corpus's actual "
-        "widest live values; only the first two have a literal template on "
-        "record anywhere."
+    widest_page = max(c["page"] for c in chunks)
+    widest_end = max(c["char_end"] for c in chunks)
+    widest_document_id = max((c["document_id"] for c in chunks), key=len)
+    start = 0
+
+    header = render_header(
+        document_id=widest_document_id,
+        page=widest_page,
+        char_start=start,
+        char_end=widest_end,
     )
-    headers = _render_headers(chunks)
-    header_counts = {label: len(encoding.encode(text)) for label, text in headers.items()}
-    for label, count in header_counts.items():
-        print(f"  {count:>4} tokens  {label}")
-    actual_max = max(header_counts.values())
+    overhead = len(encoding.encode(render_block(header, "")))
+
     print(
-        f"\nactual max: {actual_max} tokens vs "
+        "\nprovenance header renderer: app/services/provenance.py. "
+        "Measured, not reconstructed -- this script imports the renderer's own "
+        "`render_header`/`render_block`, so the format below is the format the "
+        "generator will actually see. The five formats this section used to "
+        "reconstruct are gone: the renderer emits one."
+    )
+    print(f"  format at widest live values: {header!r}")
+    print(f"  {overhead:>4} tokens  per-chunk overhead (header + newline + separator)")
+    print(
+        f"\nmeasured per-chunk overhead: {overhead} tokens vs "
         f"PER_CHUNK_OVERHEAD_TOKENS={PER_CHUNK_OVERHEAD_TOKENS}"
     )
-    assert actual_max <= PER_CHUNK_OVERHEAD_TOKENS, (
-        f"reconstructed header max {actual_max} exceeds PER_CHUNK_OVERHEAD_TOKENS "
-        f"({PER_CHUNK_OVERHEAD_TOKENS}) -- chunk 7's real renderer could violate "
-        "the budget if its format renders this large. This is a reconstruction, "
-        "not the real renderer -- treat a failure here as a reason to check the "
-        "real one closely once it exists, not as proof it is wrong."
+    assert overhead <= PER_CHUNK_OVERHEAD_TOKENS, (
+        f"measured per-chunk overhead {overhead} exceeds PER_CHUNK_OVERHEAD_TOKENS "
+        f"({PER_CHUNK_OVERHEAD_TOKENS}) -- the renderer's real format does not fit "
+        "the budget chunk 6 charges for it. This is the real renderer, not a "
+        "reconstruction: treat a failure here as a live budget defect."
     )
 
 
@@ -264,8 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "counter validation only -- skip the provenance-header "
-            "reconstruction. Use until chunk 7's renderer exists for real "
-            "(see docs/DECISIONS.md 2026-08-24 correction)."
+            "measurement. Kept for a counter-only run; the reason it existed "
+            "(no renderer to measure) is gone as of chunk 8.2."
         ),
     )
     args = parser.parse_args(argv)
