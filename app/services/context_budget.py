@@ -137,6 +137,20 @@ class HeuristicCharCounter:
     one line — but a pure chars/N ratio under-counts badly on CJK, where BPE
     runs at roughly one token per character.
 
+    The worst single offender, named so the measurement is checkable rather
+    than merely cited: `chk_01M0D4BMG6AASVJBVVD32X3B4S` -- heuristic 105
+    tokens, tiktoken reference 108 (0.9722x). Re-measured unchanged
+    2026-09-09 by `scripts.validate_token_counter`.
+
+    STATUS of that under-count: **not fixed, and not open either** -- closed
+    by demotion, chunk 7 Phase E (docs/DECISIONS.md, 2026-08-25). It is not a
+    live overflow path, because `plan_context` defaults to `TiktokenCounter`;
+    it becomes one only for a caller who explicitly passes this counter, and
+    such a caller is choosing a known-unsafe estimate. It is NOT absorbed by
+    the `PER_CHUNK_OVERHEAD_TOKENS` over-reserve -- that margin covers the
+    header format, and a per-chunk token margin cannot bound a percentage
+    error on chunk text in any case.
+
     ponytail: a heuristic, not a tokenizer, and demonstrably not a safe one
     for anything table/list/identifier-dense. `TiktokenCounter` is the
     replacement; see it for what changed.
@@ -232,27 +246,57 @@ QUERY_RESERVE = 512
 # off. Sized for a multi-paragraph grounded answer with inline citations.
 ANSWER_RESERVE = 4_000
 
-# The provenance header the Chunk 7 renderer will emit per included chunk, so
-# the model can cite.
+# The provenance header `app/services/provenance.py` emits per included chunk,
+# so the model can cite.
 #
-# UNVALIDATED ESTIMATE. Its PROVENANCE IS NOT ESTABLISHED. No script, command,
-# or recorded derivation anywhere in this repo produces this value, or the
-# 23/40/49/69/74 header-token figures once cited as its basis: `git log --all
-# -S` on those figures returns exactly one commit, d7483ed -- the commit that
-# wrote the claim. No deleted script stands behind it either. An earlier
-# version of this comment called the value MEASURED; that is false, and this
-# comment replaces it.
+# STATUS as of chunk 8.3 (2026-09-09): DELIBERATE OVER-RESERVE, CEILING
+# MEASURED. This replaces the previous status, UNVALIDATED ESTIMATE with
+# PROVENANCE NOT ESTABLISHED -- what changed is that there is now a real
+# renderer and a real measurement of it, not that 96 was ever vindicated.
 #
-# The 2026-08-24 DECISIONS.md correction retracted the CLAIM, not a result,
-# because no measurement ever occurred: the renderer the value was supposedly
-# measured against does not exist, and 3 of the 5 header formats cited never
-# had a literal template on record. The value itself is unchanged -- unsourced
-# is not the same as wrong -- and stays in force as a working estimate.
+# THE CEILING: 35 tokens. Measured 2026-09-09 by `scripts.validate_token_counter`
+# (run WITHOUT `--skip-headers`) against `app.services.provenance`'s own
+# `render_header`/`render_block`, at the frozen corpus's widest live values
+# (page=247, chars=0-271256). It is an UPPER BOUND, not a typical value: every
+# other chunk in the corpus renders a shorter header, so 35 is what the widest
+# possible header costs, not what an average one does.
 #
-# CLOSING CONDITION: a real measurement of chunk 7's renderer's actual header
-# formats, via `scripts/validate_token_counter.py` run WITHOUT
-# `--skip-headers`. Blocked until that renderer exists. Until then `_demo()`
-# fails unconditionally -- see `ProvenanceHeaderUnmeasured`.
+# 96 IS RETAINED, NOT CORRECTED, and the two numbers are not a discrepancy to
+# reconcile -- they describe DIFFERENT FORMATS. 96 was never measured against
+# any format present in this tree: `git log --all -S` on the 23/40/49/69/74
+# header-token figures once cited as its basis returns exactly one commit,
+# d7483ed, the commit that wrote the claim, and no deleted script stands behind
+# it. The pre-8.2 reconstruction in `scripts/validate_token_counter.py` that
+# came closest passed a CHUNK id under the `doc_id=` label, so even that
+# measured a wider string than the renderer emits. 96's origin remains NOT
+# ESTABLISHED and always will be; it is now kept for what it does, not for
+# where it came from.
+#
+# WHY RETAIN RATHER THAN LOWER: over-reserving cannot overflow the context
+# window; under-reserving can. The 61-token difference buys margin against a
+# format change, a wider corpus, or a generation-model tokenizer that fragments
+# the header harder than cl100k_base does -- and it costs 61 tokens per included
+# chunk out of a 193,488-token usable budget, which is not a cost worth
+# optimising. Do not lower it to 35 to make the two numbers match; matching them
+# would trade real headroom for tidiness.
+#
+# ASSUMPTION, NOT VERIFIED: the 35 is a wrapper-alone measurement --
+# `count(render_block(header, ""))` -- which treats tokenization as ADDITIVE
+# across the header/text boundary. A real block's `block_tokens - text_tokens`
+# could differ if a subword merged across that boundary. Not measured either
+# way; recorded here so the figure is not read as tighter than it is.
+#
+# PINNED TO THE FROZEN CORPUS: 35 is measured against
+# doc_01M0D39WZDYY7STA3PHWT5R4C7, 260 chunks. If the corpus unfreezes, the
+# measurement VOIDS -- re-run `scripts.validate_token_counter` before relying
+# on it again. Widest live values are corpus properties, not constants.
+#
+# SEPARATELY, AND NOT WHAT THIS MARGIN IS FOR: `HeuristicCharCounter`
+# under-counts against tiktoken cl100k_base (min margin 0.9722x, 4 of 260
+# chunks). That is NOT a live overflow path through this constant, because
+# `plan_context` defaults to `TiktokenCounter` and has since chunk 7 Phase E
+# (docs/DECISIONS.md, 2026-08-25) -- the heuristic's error never reaches the
+# budget unless a caller explicitly passes it. See `HeuristicCharCounter`.
 PER_CHUNK_OVERHEAD_TOKENS = 96
 
 # Measured 2026-08-24 against the live corpus (260 chunks, document
@@ -302,26 +346,6 @@ class MixedScoreSources(BudgetError):
     scales and would do it silently, always ordering every reranked hit above
     every un-reranked one regardless of relevance. Uniformity is what makes the
     RRF fallback in `_score_source` sound; this is not a general comparator.
-    """
-
-
-class ProvenanceHeaderUnmeasured(RuntimeError):
-    """Blocking prerequisite for chunk 7, not a runtime budgeting failure —
-    not a `BudgetError` subclass on purpose, so it is never swallowed by
-    `app/cli.py`'s `refused:` handler; it must stop `_demo()` visibly.
-
-    Raised unconditionally by `_check_provenance_header_pending` at the end
-    of every `_demo()` run. See that function for the full story: the
-    2026-08-24 DECISIONS.md correction RETRACTED the claim that
-    `PER_CHUNK_OVERHEAD_TOKENS` was measured — the renderer it was
-    supposedly measured against does not exist, and 3 of the 5 recorded
-    header formats never had a literal template on record. The constant is
-    an UNVALIDATED ESTIMATE. This stays red — `uv run python -m
-    app.services.context_budget` cannot pass clean — until chunk 7's real
-    renderer exists and `scripts/validate_token_counter.py` (without
-    `--skip-headers`) has measured its real header formats against
-    `PER_CHUNK_OVERHEAD_TOKENS`. Delete this class and its call site then,
-    not before.
     """
 
 
@@ -845,27 +869,6 @@ def _check_never_undercounts(
     return min(margins)[0]
 
 
-def _check_provenance_header_pending() -> None:
-    """Unconditional failure. See `ProvenanceHeaderUnmeasured` for the full
-    story — this is its only call site, kept as a one-line function so the
-    thing that blocks chunk 7 is a single, greppable, undeletable line in
-    `_demo()` rather than a comment someone can skim past.
-    """
-    raise ProvenanceHeaderUnmeasured(
-        f"PER_CHUNK_OVERHEAD_TOKENS={PER_CHUNK_OVERHEAD_TOKENS} is an "
-        "UNVALIDATED ESTIMATE, not a measured figure — see docs/DECISIONS.md, "
-        "2026-08-24 (correction), "
-        "which RETRACTS the earlier chunk 6 entry's claim that it was "
-        '"MEASURED, not asserted." No renderer that emits a provenance '
-        "header exists in this codebase yet, and 3 of the 5 header formats "
-        "that claim cited never had a literal template on record. Build "
-        "chunk 7's renderer, run `uv run python -m "
-        "scripts.validate_token_counter` WITHOUT --skip-headers to measure "
-        "its real formats against PER_CHUNK_OVERHEAD_TOKENS, then delete "
-        "this check and its call site."
-    )
-
-
 def _demo() -> None:
     import asyncio
 
@@ -943,10 +946,6 @@ def _demo() -> None:
         "determinism, exclusion accounting, score-source uniformity, and the "
         "manifest block all hold"
     )
-
-    # BLOCKING PREREQUISITE for chunk 7 — see ProvenanceHeaderUnmeasured.
-    # Everything above just passed; this still fails the module on purpose.
-    _check_provenance_header_pending()
 
 
 if __name__ == "__main__":
