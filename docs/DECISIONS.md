@@ -13,6 +13,162 @@ Newest entries first.
 
 ---
 
+## 2026-09-09 — Chunk 8.3: `PER_CHUNK_OVERHEAD_TOKENS = 96` RECONCILED as a DELIBERATE OVER-RESERVE against a MEASURED 35-token ceiling; the `ProvenanceHeaderUnmeasured` tripwire is DELETED
+
+> **Line-citation convention for this entry.** Every path below is repo-root-relative and every
+> citation is pinned to a named revision: source and `docs/DECISIONS.md` citations to **`1af392e`**,
+> `09_Memory/DECISIONS.md` citations to **`f1787a8`** — the revisions immediately before this entry
+> was written. Prepending an entry shifts every line number beneath it, so an unpinned self-citation
+> is stale the moment it is committed. Files are cited by full path throughout:
+> `app/api/v1/query.py` and `app/schemas/query.py` share a basename, and a bare `query.py` would be
+> ambiguous between them.
+
+**Decision, in one line.** `PER_CHUNK_OVERHEAD_TOKENS` keeps the value 96, its status changes from
+UNVALIDATED ESTIMATE / PROVENANCE NOT ESTABLISHED to **DELIBERATE OVER-RESERVE with a MEASURED
+CEILING of 35 tokens**, and the tripwire that had been holding `app/services/context_budget.py`'s
+`_demo()` red since chunk 6 — `ProvenanceHeaderUnmeasured` and
+`_check_provenance_header_pending` — is deleted, because the condition it was written to enforce
+is now met.
+
+---
+
+### A. The reconciliation: 96 retained, 35 measured, and they are not the same measurement
+
+**The ceiling is 35 tokens.** Measured 2026-09-09 by `scripts/validate_token_counter.py` run
+WITHOUT `--skip-headers`, against `app/services/provenance.py`'s own `render_header`/`render_block`
+— the script imports them rather than reconstructing a format, so what was measured is the format
+the generator will actually see. Measured at the frozen corpus's widest live values (`page=247`,
+`chars=0-271256`), against an empty body, so the figure is the wrapper alone: header, its newline,
+and the block separator.
+
+**It is an UPPER BOUND, not a typical value.** Every other chunk in the corpus renders a shorter
+header. 35 is what the widest possible header costs.
+
+**96 is RETAINED, NOT CORRECTED, and the gap is not a discrepancy to reconcile — the two numbers
+describe DIFFERENT FORMATS.** 96 was never measured against any format present in this tree. The
+`23/40/49/69/74` header-token figures once cited as its basis return exactly one commit under
+`git log --all -S` — `d7483ed`, the commit that wrote the claim — and no deleted script stands
+behind it (established by the 2026-09-04 entry below, and unchanged by this one). Even the closest
+thing to a measurement, the pre-8.2 reconstruction inside `scripts/validate_token_counter.py`,
+passed a **chunk** id under the `doc_id=` label and so measured a wider string than the renderer
+emits. **96's origin remains NOT ESTABLISHED and always will be.** What changed is that it is now
+retained for what it does, not for where it came from.
+
+**Why retain rather than lower to 35.** Over-reserving cannot overflow the context window;
+under-reserving can. The 61-token difference buys margin against a format change, a wider corpus,
+or a generation-model tokenizer that fragments the header harder than cl100k_base does — and it
+costs 61 tokens per included chunk out of a 193,488-token usable budget. Lowering it to make the
+two numbers match would trade real headroom for tidiness. **NOT ESTABLISHED:** whether 61 tokens is
+the *right* margin. No analysis sized it; it is what fell out of retaining 96, and this entry does
+not claim otherwise.
+
+**ASSUMPTION, recorded because it is not verified.** The 35 is a wrapper-alone measurement —
+`count(render_block(header, ""))` — which treats tokenization as **additive across the header/text
+boundary**. A real block's `block_tokens - text_tokens` could differ if a subword merged across
+that boundary. Not measured either way. The figure should not be read as tighter than it is.
+
+**PINNED TO THE FROZEN CORPUS.** 35 is measured against `doc_01M0D39WZDYY7STA3PHWT5R4C7`, 260
+chunks. Widest live values are corpus properties, not constants: **if the corpus unfreezes, this
+measurement VOIDS** and `scripts/validate_token_counter.py` must be re-run before the figure is
+relied on again.
+
+Recorded in the source as a rewritten comment block above the constant in
+`app/services/context_budget.py`. **The value itself was not edited.**
+
+---
+
+### B. The `HeuristicCharCounter` under-count: already recorded, and CLOSED — not an open item absorbed by this margin
+
+Chunk 8.3's brief asked for this to be recorded as *"a live overflow path currently absorbed by the
+`PER_CHUNK_OVERHEAD_TOKENS` over-reserve; OPEN, not fixed."* **That framing was not written,
+because the tree contradicts it and this log already says so twice.** Recorded here as a
+correction to the instruction rather than silently complied with or silently dropped.
+
+**What is true:** `HeuristicCharCounter` under-counts against tiktoken cl100k_base — min margin
+**0.9722x**, 4 of 260 chunks, worst offender `chk_01M0D4BMG6AASVJBVVD32X3B4S` at heuristic 105 vs
+reference 108. Re-measured unchanged on 2026-09-09.
+
+**Why it is not a live overflow path.** `HeuristicCharCounter` was **demoted** on 2026-08-25
+(chunk 7 Phase E, entry below): `app/services/context_budget.py`'s `plan_context` defaults to
+`TiktokenCounter`, which counts the real text and multiplies by `CROSS_TOKENIZER_SAFETY_FACTOR =
+1.2`. The heuristic's error never reaches the budget unless a caller explicitly passes that
+counter, and such a caller is choosing a known-unsafe estimate. The exposure was closed **by
+demotion**, not by a margin.
+
+**And it could not be absorbed by this margin in any case.** `PER_CHUNK_OVERHEAD_TOKENS` is a
+fixed per-chunk token count covering the header format; the under-count is a *percentage* error on
+chunk text. A constant cannot bound a proportional error — on a large enough chunk it is exceeded
+by construction.
+
+Recorded in the source at `HeuristicCharCounter`'s docstring in
+`app/services/context_budget.py`, which already carried the 0.9722x figure and the 4-of-260 count.
+Two things were added: the worst offender's identity, and an explicit STATUS line saying the item
+is closed-by-demotion and is **not** absorbed by the over-reserve. **The counter was not fixed and
+was not meant to be.**
+
+---
+
+### C. The tripwire is deleted, and why deleting it was safe only after A and B
+
+Three deletions in `app/services/context_budget.py`, exactly as scoped by the chunk 8.2 report and
+by the tripwire's own instructions:
+
+1. the call site at the end of `_demo()`, including its two comment lines;
+2. `_check_provenance_header_pending`, the function;
+3. `ProvenanceHeaderUnmeasured`, the exception class.
+
+Nothing else was deleted. `git diff --stat` for the whole chunk is one file: 62 insertions, 63
+deletions.
+
+**The tripwire's own closing condition, quoted from the code it was written in, was met exactly:**
+"Build chunk 7's renderer, run `uv run python -m scripts.validate_token_counter` WITHOUT
+`--skip-headers` to measure its real formats against `PER_CHUNK_OVERHEAD_TOKENS`, then delete this
+check and its call site." The renderer is `app/services/provenance.py`, built in chunk 8.2
+(`1af392e`). The measurement ran. This entry is the record.
+
+**Why the ordering mattered, and why C would have been wrong on its own.** The tripwire's purpose
+was never "block until a renderer exists" — it was "do not let an unsourced number stand
+unexamined." Deleting it first would have removed the alarm while leaving the condition it was
+alarming about undocumented, which converts a loud, greppable defect into a silent one. Phase A had
+to land first so the constant carries its real status, and Phase B had to land so the one adjacent
+measurement that looks like a reason to keep a margin is correctly attributed instead of being
+folded into this decision as a rationale it does not support. **Deleting a tripwire is only safe
+once the thing it was pointing at is written down somewhere that does not depend on the tripwire
+existing.** That place is this entry and the two comment blocks.
+
+**What replaces it as the ongoing guard.** `scripts/validate_token_counter.py`'s header section now
+asserts `overhead <= PER_CHUNK_OVERHEAD_TOKENS` against the **real renderer**, so a format change
+that outgrows the budget fails a run rather than a reconstruction. That assertion is live and
+measures 35 against 96 today.
+
+**Historical references retained.** `ProvenanceHeaderUnmeasured` still appears at five places in
+`docs/DECISIONS.md` (`1af392e`) — the 2026-08-25, 2026-09-04, and earlier entries that describe it
+while it existed. Those are historical records of what was true when written and are **left in
+place, not rewritten**, per this log's append-only rule. The symbol is gone from the source; the
+history of it is not.
+
+---
+
+### Verification (all run at the tree this entry describes)
+
+`tests/test_far_field_gate.py`, `tests/test_query_endpoint.py`,
+`tests/test_vector_search_stability.py`, `tests/test_provenance.py` — all pass, exit 0.
+`.venv/bin/pre-commit run --all-files` — ruff, ruff-format, gitleaks, mypy (strict) all Passed.
+`scripts/validate_token_counter.py` — still reports 35 vs 96, and no longer fails on a deleted
+check.
+
+**`python -m app.services.context_budget` now completes, exit 0** — the first clean `_demo()` run
+since chunk 6 wrote the tripwire. Both invariants hold: `HeuristicCharCounter` worst-case hit 675
+tokens (historical), `TiktokenCounter` worst-case hit 584 tokens against a usable budget of
+193,488.
+
+**The gate was not touched, by construction.** `app/services/evaluation.py` (`GATE_FIGURES`, the 12
+figures) and `app/services/retrieval.py` (`_PRE_RERANK_DIGEST`) are **unmodified** — `git status`
+shows exactly one changed file, `app/services/context_budget.py`. Neither figure set is on that
+file's write path.
+
+---
+
 ## 2026-09-09 — Chunk 8.0 decision record: NEVER WRITTEN. Reconstruction refused; tree state recorded as OBSERVATION only.
 
 > **Line-citation convention for this entry.** Every path below is repo-root-relative and every
