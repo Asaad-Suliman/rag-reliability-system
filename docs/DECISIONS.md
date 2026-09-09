@@ -13,6 +13,76 @@ Newest entries first.
 
 ---
 
+## 2026-09-09 — Chunk 8.0 decision record: NEVER WRITTEN. Reconstruction refused; tree state recorded as OBSERVATION only.
+
+> **Line-citation convention for this entry.** Every path below is repo-root-relative and every
+> citation is pinned to a named revision: source and `docs/DECISIONS.md` citations to **`746ac15`**,
+> `09_Memory/DECISIONS.md` citations to **`7fa61b4`** — the revisions immediately before this entry
+> was written. Prepending an entry shifts every line number beneath it, so an unpinned self-citation
+> is stale the moment it is committed.
+
+**Status.** No DECISIONS entry was written for chunk 8.0 at the time, and Asaad does not recall what
+was decided. Intent that was never recorded is not reconstructed here: a rationale inferred from
+commit subjects and shipped code has no source, and a later reader cannot tell it apart from one that
+was actually decided. This entry keeps three things separate — the gap itself, what the tree verifies
+as OBSERVATION, and the rationale that was recorded elsewhere and survives.
+
+---
+
+### 1. What the tree shows (OBSERVATION)
+
+Each item verified directly at `746ac15`, not recalled.
+
+- **The wiring commit.** `68707ed` — "feat: add POST /api/v1/query gated by the Guardrail". Six
+  files, +417/-1. The gate is called at `app/api/v1/query.py:83`.
+- **The shipped response.** `QueryResponse` carries four fields at `app/schemas/query.py:83-86`:
+  `verdict`, `verdict_meaning`, `top_1_distance`, `citations`.
+- **Citations on both verdicts.** Built unconditionally from `result.hits` at
+  `app/api/v1/query.py:92-104`, with no branch on verdict, so `ABSTAIN_OUT_OF_DOMAIN` carries them
+  too.
+- **No `answer` field.** It does not exist in the schema.
+- **No generation on the route.** No generation call exists anywhere in `app/`. `llm_api_key` is
+  configured but read only by the readiness probe at `app/api/v1/health.py:55`, for presence.
+- **No auth, no rate limiting.** Neither exists on the route or in middleware.
+
+### 2. Rationale that WAS recorded — not reconstruction
+
+The premise that chunk 8.0 left no rationale was tested against the tree and is **false**. None of it
+reached DECISIONS, but it was written down at the time and it survives in committed prose:
+
+- `68707ed`'s commit body records why there is no `answer` field, why citations are returned on both
+  verdicts and both are 200, why `MAX_QUESTION_CHARS` is derived by import rather than chosen, why
+  `rrf_score` is excluded from the payload while `rerank_score` and `vector_distance` are exposed,
+  why `GuardrailInputError` and `CorpusUnavailableError` return 503 rather than 500, why `arm` and
+  the `k` values are not exposed, and why auth, rate limiting and CORS are absent.
+- `app/schemas/query.py:1-8` restates the no-`answer` reasoning; the `QueryResponse` docstring at
+  `app/schemas/query.py:73-82` records why `verdict` is the first field and why a refusal carries
+  its citations.
+- `app/api/v1/query.py:1-10` names auth, rate limiting and CORS as required before any deployment
+  and assigns that policy to Step 04, citing `app/core/security.py`.
+
+Reading these is not inference. They are the decisions' own contemporaneous statements; what is
+missing is the DECISIONS entry, not the reasoning.
+
+### 3. What is NOT ESTABLISHED
+
+Two choices have no recorded rationale anywhere in the tree, and none is invented here:
+
+- Why the far-field gate is the **sole** ship gate on the route — no groundedness check and no other
+  verdict source exists.
+- Why `top_1_distance` is surfaced at the top level of the response. `68707ed` explains which
+  *citation* scores are exposed and why; it is silent on this one.
+
+---
+
+**Lesson.** A decision entry written after the fact is bounded by memory. What saved most of chunk
+8.0 was not recall but the habit of writing the reasoning into the commit body and the module
+docstring while the decision was being made — the two items now unrecoverable are exactly the two
+nobody wrote down anywhere. Write the entry in the chunk that makes the decision; until then, the
+commit body is the backstop.
+
+---
+
 ## 2026-09-05 — Chunk 8.1 scope line "apply API Contract 1.1.0": CLOSED. Amendment remains approved and pending.
 
 > **Line-citation convention for this entry.** Every path below is repo-root-relative and every
