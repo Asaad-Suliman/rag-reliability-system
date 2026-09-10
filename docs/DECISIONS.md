@@ -13,6 +13,201 @@ Newest entries first.
 
 ---
 
+## 2026-09-10 — Chunks 8.5 + 8.6: the budget validator was certifying a counter demoted on 2026-08-25, and its "equal-cost" fixtures were false under ANY counter. Re-pointed to `TiktokenCounter`, fixtures repaired to prose, all ten checks run for real, `plan_context`'s dormant default exercised.
+
+> **Line-citation convention for this entry.** Every path below is repo-root-relative and every
+> citation is pinned to a named revision: source and `docs/DECISIONS.md` citations to **`b98fe1e`**,
+> `09_Memory/DECISIONS.md` citations to **`9478234`** — the revisions immediately before this entry
+> was written. Prepending an entry shifts every line number beneath it, so an unpinned self-citation
+> is stale the moment it is committed. Files are cited by full path throughout:
+> `app/api/v1/query.py` and `app/schemas/query.py` share a basename, and a bare `query.py` would be
+> ambiguous between them.
+
+**Decision, in one line.** `app/services/context_budget.py`'s `_check_offline` now runs under
+`TiktokenCounter` — the counter `plan_context` actually defaults to — its three big-hit fixtures
+are one shared prose text instead of three different repeated characters, and
+`tests/test_budget_counter_default.py` exercises the `counter=None` default branch that nothing in
+the tree had ever taken.
+
+---
+
+### A. What was wrong: the validator certified a counter nothing ships with
+
+`HeuristicCharCounter` was demoted on **2026-08-25** (chunk 7 Phase E, entry below):
+`app/services/context_budget.py`'s `plan_context` defaults to `TiktokenCounter`. But `_demo()`
+constructed a `HeuristicCharCounter` and handed it to `_check_offline`, so all ten behavioural
+checks — impossible-budget, `usable_budget` arithmetic, empty-in/empty-out, score-source
+uniformity, tie-break, determinism, whole-chunk inclusion, exclusion accounting, the
+top-hit-always-included invariant, `ChunkExceedsBudget`, and the manifest round-trip — were
+certified against a counter production does not use. Found by the chunk 8.4 read-only inspection;
+fixed here.
+
+The manifest assert inside `_check_offline` hard-coded the demoted counter's identity, so it moved
+with the re-point. See §D.
+
+### B. The finding that stopped chunk 8.5: "equal cost" was false under any counter
+
+Re-pointing alone did **not** work. `_check_offline` failed immediately at the binding-budget
+check with `ChunkExceedsBudget: chunk chk_3 ... costs 936 tokens ... but the whole usable budget
+is 620`.
+
+Cause, measured rather than inferred. The three big-hit fixtures were built from three DIFFERENT
+repeated characters and commented as equal-cost:
+
+```
+_fake_hit("chk_1", "x" * 1_400, rerank_score=3.0),  # big_cost
+_fake_hit("chk_2", "y" * 1_400, rerank_score=2.0),  # 2 * big_cost total, fits
+_fake_hit("chk_3", "z" * 1_400, rerank_score=1.0),  # would be 3 * big_cost, does not
+```
+
+while `big_tokens` was measured from **`chk_1`'s text only**. Under `TiktokenCounter` those three
+strings cost **210 / 420 / 840** tokens — a 4x spread. Under `HeuristicCharCounter` they cost 400
+each, because that counter is `ceil((len - non_ascii) / CHARS_PER_TOKEN) + non_ascii` and reads
+length and nothing else.
+
+**The comments were therefore false under any counter that is not a pure length ratio** — the
+heuristic did not make them true, it only hid that they were not. This is a strictly worse finding
+than "the checks ran under the wrong counter": the checks' expectations were *arithmetically
+shaped around* the demoted counter. `plan_context` itself was correct throughout; nothing in the
+production path was broken at any point.
+
+Chunk 8.5 stopped here rather than adjusting the check, and committed nothing.
+
+### C. The repair: one shared prose text, not one shared character
+
+All three big hits now use a single `big_text`, so equal cost is a property of the fixtures
+themselves rather than an assumption about the counter. `big_text` is
+`(_FIXTURE_PROSE * 20)[:1_400]`, where `_FIXTURE_PROSE` is a synthetic English sentence defined
+beside `_fake_hit` in `app/services/context_budget.py`.
+
+**Prose rather than a repeated character, deliberately.** A 1,400-character run of one character is
+a BPE extreme — long merges, absurdly few tokens — and would put the check in a tokenization regime
+the corpus never enters. Measured: the repaired `big_text` is 1,400 chars → **336** tiktoken tokens
+(≈4.17 chars/token) versus **400** under the heuristic, a 1.19x margin that sits inside the corpus's
+own regime (260 real chunks, median margin 1.3820x). The old `"x" * 1_400` was 210 tokens, ≈6.7
+chars/token — nothing in the corpus tokenizes like that.
+
+**Synthetic rather than lifted from the corpus,** so re-ingesting data cannot move a fixture.
+Byte-stable: no randomness, no clock, no hash seed.
+
+**Scope of the repair, and one place the chunk 8.6 brief was not followed.** The brief said to
+apply the repair to *every* fixture built from a repeated character. Four groups were examined and
+only one was repaired:
+
+| fixture group | asserts a cost relationship? | action |
+| --- | --- | --- |
+| `rrf_hits`/`rr_hits` (`"a"`/`"b"` × 100) | No — reads `.score_source` only; both fit the full budget | unchanged |
+| `tied` (`"a"`/`"b"`/`"c"` × 100) | No — the comment says "equal **scores**", i.e. `rerank_score=2.5`, set explicitly per hit | unchanged |
+| `small_tokens`/`chk_4` (`"w"` × 10) | Yes, and it **holds** — measured from the identical literal the fixture uses | unchanged |
+| the three big hits | Yes, and it was **false** | repaired |
+
+The brief's own qualifying criterion — "any fixture whose comment asserts a cost relationship must
+actually have it under `TiktokenCounter`" — is what was applied; three of the four groups do not
+meet it. Rewriting `tied` in particular would have blurred a check about identity ordering, which
+the no-weakening rule forbids. Recorded rather than done silently.
+
+`HeuristicCharCounter` was **not** touched and remains available to explicit callers. `counter` in
+`_demo()` stays `HeuristicCharCounter` on purpose: it feeds the historical never-under-count check
+against the vendored WordPiece reference, which is a property *of* that counter and meaningless
+under any other.
+
+### D. The manifest counter field moved — VOID CONVENTION
+
+The `budget_manifest` block asserted inside `_check_offline` previously pinned
+`"counter": "heuristic-char-3.5-v1"`. It now pins
+`"counter": "tiktoken-cl100k_base-v1+1.2x-cross-tokenizer"`.
+
+**The prior literal is VOID as of this entry** — not wrong when written, but naming a counter that
+check no longer runs. Every other field is unchanged: `context_window` 200,000,
+`prompt_scaffold_reserve` 2,000, `query_reserve` 512, `answer_reserve` 4,000,
+`per_chunk_overhead_tokens` 96, `usable_budget` 193,488. `usable_budget` is pure reserve arithmetic
+and independent of which counter runs.
+
+The literal is spelled out rather than read off `TiktokenCounter.name` so that a change to
+`CROSS_TOKENIZER_SAFETY_FACTOR` — which that name embeds — fails the check and gets looked at,
+instead of following the constant silently.
+
+**No committed measurement artifact moved.** `docs/chunk7-scores.json`'s `manifest.budget.counter`
+still reads `heuristic-char-3.5-v1`, because it comes from
+`scripts/chunk5_benchmark.py`'s `_manifest`, which constructs its own `HeuristicCharCounter()`
+explicitly and never received the `_check_offline` parameter. `docs/chunk5-results.json` has no
+`budget` block at all. Whether `scripts/chunk5_benchmark.py` should also re-point is **NOT
+ESTABLISHED** — it was out of scope here and no rationale for either choice was decided.
+
+### E. The four previously-unreached checks: first real results
+
+Chunk 8.5's failure aborted `_check_offline` partway, leaving four checks with no result under
+`TiktokenCounter` — recorded then as UNKNOWN, explicitly not as passing. They have now run:
+
+| check | first result under `TiktokenCounter` |
+| --- | --- |
+| a smaller later chunk still fits after a larger one was skipped | **PASS** |
+| the top-ranked hit is ALWAYS included | **PASS** |
+| a single hit that cannot fit AT ALL raises `ChunkExceedsBudget` | **PASS** |
+| (10) the manifest block round-trips and carries all five values + identity | **PASS** |
+
+**Execution was verified, not inferred from a green exit.** A `sys.settrace` line-tracer over
+`_check_offline(TiktokenCounter())` confirmed every one of the twelve comment-delimited blocks
+executed at least one line — 108 distinct lines in total. A passing process exit proves only that
+nothing raised; the trace proves each check ran.
+
+### F. `plan_context`'s `counter=None` default had no exerciser at all
+
+`app/services/context_budget.py`'s `if counter is None: counter = TiktokenCounter()` was taken by
+**nothing in the tree**. Every call site passed a counter explicitly: the eleven inside
+`_check_offline`, and `scripts/chunk7_scores.py`, whose own docstring says so — "the counter is
+passed explicitly rather than relying on the default, so a measurement run does not become the
+first real exercise of the dormant TiktokenCounter default path." That comment names the gap and
+declines to fill it. The gap was therefore known and deliberate on the measurement side; what was
+missing was a test.
+
+`tests/test_budget_counter_default.py` (new; plain asserts, runnable as
+`python -m tests.test_budget_counter_default`, no pytest) fills it with two properties:
+
+1. **the branch is taken** — `plan_context(hits, budget)` with no counter yields
+   `counter_name == TiktokenCounter.name`, and an explicitly passed counter still wins;
+2. **a cold cache raises `TiktokenCacheMissing` from that branch** — a deployment defect surfacing
+   in a test rather than on a live query.
+
+**(2) runs in a subprocess, and had to.** `tiktoken.get_encoding` memoises into a module-global
+`ENCODINGS` dict, so once any `TiktokenCounter()` has succeeded in a process, a later one returns
+the memoised encoding, attempts no network call, and **cannot raise**. An in-process cold-cache
+check written after any successful load would have asserted nothing and still looked green — the
+same class of blindness `tests/test_vector_search_stability.py` avoids with separate OS processes.
+The child gets a cold cache by running with its working directory set to an empty temporary
+directory: `TIKTOKEN_CACHE_DIR` is `Path("models/tiktoken")`, a **relative** path, so a different
+working directory is a missing cache — which is exactly the production failure it stands in for.
+
+**Negative control, run to prove the check is not vacuous:** the identical child executed with its
+working directory at the repo root (warm cache) prints
+`NO RAISE -- the default branch loaded an encoding from a cold cache` and exits 1. Cold → exit 0,
+warm → exit 1. The check discriminates.
+
+### G. Verification
+
+`python -m app.services.context_budget` exits **0** with all ten checks executed and passing.
+`tests/test_far_field_gate.py`, `tests/test_query_endpoint.py`,
+`tests/test_vector_search_stability.py`, `tests/test_provenance.py`, and
+`tests/test_budget_counter_default.py` all pass. `pre-commit run --all-files` — ruff, ruff-format,
+gitleaks, mypy (strict) — all pass.
+
+The two corpus worst-case asserts in `run_live`, re-measured under this run against
+`usable_budget` 193,488: `HeuristicCharCounter` worst case **675** tokens (286.6x slack, headroom
+192,813); `TiktokenCounter` worst case **584** tokens (331.3x slack, headroom 192,904). Chunk 8.4
+flagged both as passing with slack so large they cannot realistically fail — a chunk is capped at
+1,999 characters, so no corpus satisfying the `CORPUS_MAX_CHUNK_CHARS` assert can fail these. That
+observation stands unchanged; **NOT ESTABLISHED** whether either should be replaced by a tighter
+invariant, and neither was touched here.
+
+**The gate was not touched.** `app/services/evaluation.py` (`GATE_FIGURES`, the 12 figures) and
+`app/services/retrieval.py` (`_PRE_RERANK_DIGEST`) are unmodified, as are
+`app/services/vector_store.py`, `app/api/v1/query.py`, `app/schemas/query.py`, and everything under
+`docs/`. Neither figure set is reachable from `_check_offline`: it returns `None`, writes no file,
+prints nothing, and `app/services/evaluation.py` does not import `app/services/context_budget.py`
+at all.
+
+---
+
 ## 2026-09-09 — Chunk 8.3: `PER_CHUNK_OVERHEAD_TOKENS = 96` RECONCILED as a DELIBERATE OVER-RESERVE against a MEASURED 35-token ceiling; the `ProvenanceHeaderUnmeasured` tripwire is DELETED
 
 > **Line-citation convention for this entry.** Every path below is repo-root-relative and every
