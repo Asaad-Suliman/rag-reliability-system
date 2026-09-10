@@ -635,6 +635,19 @@ def budget_manifest(budget: ContextBudget, counter: TokenCounter) -> dict[str, A
 # this repo self-checks this way, and installing pytest is an approval gate.
 
 
+# Fixture prose for the budget-packing checks. Synthetic, byte-stable, and
+# deliberately ordinary English: the packing checks are about the greedy loop,
+# not about tokenizer edge cases, so the text they use should sit in the same
+# regime as the corpus rather than at a BPE extreme. Repeated to length by its
+# only caller; kept here beside `_fake_hit` because it is fixture data, not
+# budgeting logic.
+_FIXTURE_PROSE = (
+    "The budget selects whole chunks and never truncates one, because a "
+    "citation span that no longer matches the text it points at is worse "
+    "than no citation at all. "
+)
+
+
 def _fake_hit(
     chunk_id: str,
     text: str,
@@ -736,7 +749,20 @@ def _check_offline(counter: TokenCounter) -> None:
     # the constant moves the fixtures with it instead of silently invalidating
     # them. Pinning one side and not the other is the drift this closes.
     overhead = PER_CHUNK_OVERHEAD_TOKENS
-    big_tokens = counter.count("x" * 1_400)
+    # ONE shared text for all three big hits, so "equal cost" is a property of
+    # the fixtures themselves rather than a claim about the counter. Until chunk
+    # 8.6 they were "x"/"y"/"z" * 1_400 with comments calling them equal-cost:
+    # false under any counter that is not a pure length ratio, and measured
+    # under TiktokenCounter they cost 210 / 420 / 840 tokens -- a 4x spread that
+    # only HeuristicCharCounter's ceil(len / 3.5) ever hid.
+    #
+    # Prose rather than a repeated character, on purpose. A 1_400-char run of
+    # one character is a BPE extreme (long merges, absurdly few tokens) and puts
+    # this check in a tokenization regime the corpus never enters -- the 260
+    # real chunks run a median margin of 1.3820x. Synthetic rather than lifted
+    # from the corpus, so re-ingesting data cannot move a fixture.
+    big_text = (_FIXTURE_PROSE * 20)[:1_400]
+    big_tokens = counter.count(big_text)
     big_cost = big_tokens + overhead
     small_tokens = counter.count("w" * 10)
     small_cost = small_tokens + overhead
@@ -752,16 +778,18 @@ def _check_offline(counter: TokenCounter) -> None:
         per_chunk_overhead_tokens=overhead,
     )
     big = [
-        _fake_hit("chk_1", "x" * 1_400, rerank_score=3.0),  # big_cost
-        _fake_hit("chk_2", "y" * 1_400, rerank_score=2.0),  # 2 * big_cost total, fits
-        _fake_hit("chk_3", "z" * 1_400, rerank_score=1.0),  # would be 3 * big_cost, does not
+        # Same text in all three: the comments below are now arithmetic that
+        # holds, not an assumption about how the counter tokenizes.
+        _fake_hit("chk_1", big_text, rerank_score=3.0),  # big_cost
+        _fake_hit("chk_2", big_text, rerank_score=2.0),  # 2 * big_cost total, fits
+        _fake_hit("chk_3", big_text, rerank_score=1.0),  # would be 3 * big_cost, does not
     ]
     packed = plan_context(big, tight, counter)
     assert [h.chunk_id for h in packed.included] == ["chk_1", "chk_2"], packed.included
     assert [e.hit.chunk_id for e in packed.excluded] == ["chk_3"]
     assert packed.excluded[0].score == 1.0 and packed.excluded[0].tokens == big_cost
     assert packed.tokens_used == 2 * big_cost and packed.tokens_remaining == tight_slack
-    assert packed.included[0].text == "x" * 1_400, "text must never be truncated"
+    assert packed.included[0].text == big_text, "text must never be truncated"
 
     # a smaller later chunk still fits after a larger one was skipped -- the loop
     # must not stop at the first hit that does not fit, or it understates the budget
@@ -826,7 +854,11 @@ def _check_offline(counter: TokenCounter) -> None:
 
     block = json.loads(json.dumps(budget_manifest(default, counter)))
     assert block == {
-        "counter": "heuristic-char-3.5-v1",
+        # Moved by chunk 8.5 with the counter above; the literal is spelled out
+        # rather than read off TiktokenCounter.name so a change to
+        # CROSS_TOKENIZER_SAFETY_FACTOR (which the name embeds) fails here and
+        # gets looked at, instead of following the constant silently.
+        "counter": "tiktoken-cl100k_base-v1+1.2x-cross-tokenizer",
         "context_window": 200_000,
         "prompt_scaffold_reserve": 2_000,
         "query_reserve": 512,
@@ -877,8 +909,18 @@ def _demo() -> None:
     from app.core.config import get_settings
     from app.db.session import create_engine, create_session_factory
 
+    # The behavioural checks run under the counter `plan_context` actually
+    # defaults to. Until chunk 8.5 they ran under HeuristicCharCounter, which
+    # chunk 7 Phase E demoted on 2026-08-25 -- so the validator was certifying
+    # tie-break, determinism, exclusion accounting, score-source uniformity and
+    # the manifest against a counter nothing ships with.
+    #
+    # `counter` below stays HeuristicCharCounter on purpose: it feeds the
+    # HISTORICAL never-under-count check against the vendored WordPiece
+    # reference, which is a property OF that counter and is meaningless under
+    # any other one.
     counter = HeuristicCharCounter()
-    _check_offline(counter)
+    _check_offline(TiktokenCounter())
 
     async def run_live() -> tuple[int, int, float, int]:
         settings = get_settings()
