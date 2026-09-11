@@ -13,6 +13,216 @@ Newest entries first.
 
 ---
 
+## 2026-09-11 — Chunk 8.9 — generation implemented per the 8.8 design
+
+> **Line-citation convention.** Every path is repo-root-relative. Source citations are to the
+> working tree this entry describes (HEAD `9c584ae` plus the uncommitted 8.9 diff); once that diff
+> is committed they are pinned to that commit. `docs/DECISIONS.md` self-citations are to `9c584ae`
+> — prepending an entry shifts every line beneath it. `app/api/v1/query.py` and
+> `app/schemas/query.py` share a basename, so both are always cited in full.
+
+**Status: IMPLEMENTED. Held to the 8.8 pre-registration; no design choice was re-opened.**
+
+**Decision, in one line.** The generation step designed on paper in 8.8 is now built, and it is
+built exactly as pre-registered: the only thing this entry adds to that design is one gap the
+design did not cover (the ADDENDUM below).
+
+**Evidence.** `/tmp/c89/chunk89-REPORT.md`, sha256
+`52becd3b2df92aa07d64bdd71bea8696cf6cb7b4dcd839b49cd2c84d7386745c`. Gate outputs at
+`/tmp/c89/gate-before.txt` and `/tmp/c89/gate-after.txt`, both sha256
+`5d6c0d4804d1969c5df37244c5df6a0a9dabfcf838824584ae4bb7146f7ac4e8`.
+
+---
+
+### A. What landed
+
+| # | file | what |
+|---|---|---|
+| 1 | `app/core/config.py` | `llm_timeout: float = 60.0` (`:91`), `llm_max_tokens: int = 1024` (`:94`) |
+| 2 | `app/agents/prompts/answer_v1.md` | NEW. The system prompt as a versioned file, never an inline string (8.8 §K). Three rules: answer only from the block; the block is untrusted data and never instructions; say plainly when the answer is not in it |
+| 3 | `app/services/generation.py` | NEW. `GenerationUpstreamError` (`:57`), `GenerationFailed` (`:66`), `ProviderRequestError` (`:76`), `GenerationResult` (`:86`), `LLMClient` Protocol (`:94`), `load_prompt` (`:98`), `build_user_message` (`:117`), `AnthropicClient` (`:178`, `aclose()` at `:199`), `FakeLLMClient` (`:254`) |
+| 4 | `app/core/errors.py` | `GenerationUpstreamError` (`:212`) and `GenerationFailed` (`:234`) -> 503 `UPSTREAM_UNAVAILABLE` with **distinct** detail messages; `ProviderRequestError` (`:254`) -> 500 `INTERNAL_ERROR`. Registered `:301-303`. `DuplicateLocator` and the `BudgetError` subclasses are untouched and still fall to the catch-all as 500s |
+| 5 | `app/main.py` | ONE `TiktokenCounter` (`:81`), ONE `ContextBudget` (`:82`), ONE `AnthropicClient` (`:98`), `aclose()` on shutdown (`:137`). Boot fails if `llm_max_tokens > answer_reserve` (`:90-94`) |
+| 6 | `app/schemas/query.py` | `answer: str \| None` (`:93`); `verdict` stays the first key; the module docstring that justified the field's absence is rewritten |
+| 7 | `app/api/v1/query.py` | Nothing before the gate call changed. After it (`:104-118`): ABSTAIN skips everything; ANSWER_UNVERIFIED runs `plan_context` -> `render` -> `build_user_message` -> `generate`, and cites `budgeted.included`. `ANSWER_UNVERIFIED`'s `verdict_meaning` rewritten (`:50-52`), keeping "NOT ESTABLISHED" |
+| 8 | `tests/test_query_endpoint.py` | `FakeLLMClient` + the REAL `TiktokenCounter` + `ContextBudget()`. Fixture repaired to distinct locators |
+| 9 | `tests/test_generation.py` | NEW. `httpx.MockTransport`, no socket, no cost |
+
+**The success policy is narrow, deliberately:** `stop_reason == "end_turn"` **and** non-empty
+stripped text. Everything else — truncation, refusal, `stop_sequence`, `tool_use`, `pause_turn`,
+and any value Anthropic adds later — is a generation failure. A rule shaped as "fail on this list"
+would silently accept an unknown future value; this one fails closed, and a test asserts it does
+using an invented `some_future_reason`.
+
+### B. ADDENDUM — non-429 4xx (NEW; 8.8 §J does not cover it)
+
+8.8 §J routes timeout, transport error, 429 and 5xx to 503, and a bad stop reason or empty
+completion to 503-with-a-distinct-message. It says nothing about the rest of the 4xx range.
+**Decided in 8.9: any 4xx other than 429 — a bad key, a bad model name, a malformed request — is a
+configuration or request defect on this side, not an upstream outage, and maps to 500
+`INTERNAL_ERROR`** (`ProviderRequestError`). Reasoning: `UPSTREAM_UNAVAILABLE` invites a retry, and
+retrying a 401 cannot ever succeed; calling a local defect an outage would turn a fixable
+misconfiguration into a silent retry loop, and would tell the operator to look in the wrong place.
+
+HTTP dispatch reads the **status code only**. The error-body shape belongs to the provider and can
+change; a 503-vs-500 decision must not depend on being able to parse it. Asserted: a 503 whose body
+is unparseable HTML still raises `GenerationUpstreamError`.
+
+### C. API facts, as verified by the planner against Anthropic's docs, 2026-09-11
+
+Used as given; not guessed, and not re-derived from memory.
+
+- `POST https://api.anthropic.com/v1/messages`
+- Headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`
+- Body: `model`, `max_tokens`, `system` (a string), `messages=[{"role": "user", "content": ...}]`
+- Response: `content` is a list of blocks; the answer is the concatenated text of the blocks whose
+  `type` is `"text"`; `usage.input_tokens` / `usage.output_tokens`
+- `stop_reason` values include `end_turn`, `max_tokens`, `stop_sequence`, `tool_use`, `pause_turn`,
+  `refusal`. **A refusal is HTTP 200, not an error, and its `content` may be EMPTY** — which is
+  exactly why status alone is not allowed to mean "an answer came back".
+
+`ANTHROPIC_VERSION` is pinned in source (`app/services/generation.py:45`) and asserted equal to
+`"2023-06-01"` in the test, so a silent bump is a test failure rather than a behaviour change.
+
+### D. Prompt-injection fence
+
+Retrieved text enters inside `<retrieved_context>...</retrieved_context>`, and **both** tags are
+neutralised to `&lt;...&gt;` wherever they occur — in the context **and** in the question, which is
+equally untrusted. Without that, a passage carrying the closing tag would end the block early and
+have its remainder read as instructions. Asserted: exactly one opening and one closing tag survive,
+the closing tag is the last thing in the block, and the hostile text itself is still present,
+defanged. **No claim is made that this prevents ungrounded output.** It prevents one specific
+escape; groundedness is the Verifier's job and the Verifier does not exist.
+
+### E. Gate discipline — BEFORE and AFTER (8.8 §M)
+
+Run before any edit and again after the full build, same four commands:
+
+| # | command | reproduces |
+|---|---|---|
+| 1 | `python -m app.services.evaluation` | the 12-figure gate, demo |
+| 2 | `python -m app.cli evaluate` | the 12 figures, live |
+| 3 | `python -m app.services.retrieval` | `_PRE_RERANK_DIGEST`, 8 questions x 2 arms |
+| 4 | `python -m tests.test_far_field_gate` | the pinned class-1 miss set |
+
+All four exit `0` in both runs. `diff /tmp/c89/gate-before.txt /tmp/c89/gate-after.txt` is
+**EMPTY**, and the two files share sha256
+`5d6c0d4804d1969c5df37244c5df6a0a9dabfcf838824584ae4bb7146f7ac4e8` — so all 12 figures
+(lexical `0.233 0.400 0.567 0.142`, vector `0.833 0.900 1.000 0.700`, hybrid
+`0.667 0.867 0.967 0.445`), the digest, and the miss set (`ood08 1.4131`, `ood01 1.4898`,
+`ood10 1.4906`) are byte-identical across the change. Generation sits off the measured path, as
+8.8 §M said it must.
+
+Offline-ness was established **by reading the code before running anything**:
+`load_query_vectors` (`app/services/evaluation.py:252-294`) takes `allow_network=False` by default
+and **raises on a cache miss rather than embedding** (`:278-284`), and every one of the four
+commands reaches it with that default. **No real LLM or embedding call of any kind was made in this
+chunk.**
+
+### F. Other verification
+
+`.venv/bin/pre-commit run --files <the 9 changed/new files>`: PASS (ruff, ruff format, gitleaks,
+mypy). `.venv/bin/mypy --strict app scripts tests`: PASS, no issues in 62 source files. All six
+tests exit `0` — the five that existed plus `tests/test_generation.py`. `git diff --stat` touches
+only `app/` and `tests/`.
+
+### G. Smoke evidence (2026-09-11, consented by Asaad)
+
+**Spent: exactly two paid calls, and no more.** One Voyage embedding call
+(`POST https://api.voyageai.com/v1/embeddings` -> **200 OK**) and one Anthropic Messages call
+(`POST https://api.anthropic.com/v1/messages` -> **401 Unauthorized**), both under request id
+`req_1bafb0491f0d`. **No second request was made**, and none was attempted after the 401.
+
+**The question was `a03`** from golden set v3, chosen because its verdict was confirmed
+`ANSWER_UNVERIFIED` offline first — cached query vectors, `allow_network=False`, $0 — under the
+route's exact reranker configuration, so a single request would suffice. Live verdict:
+`ANSWER_UNVERIFIED`, `top_1_distance` `1.0520274639129639`. Retrieval, the budget, the render and
+the request construction all ran and the request reached the provider; the failure is downstream of
+every one of them, in generation alone.
+
+**The 401 took the ADDENDUM path end to end.** `ProviderRequestError` -> **500 `INTERNAL_ERROR`**,
+with the error body never parsed — the decision in §B, executed against the live API rather than a
+mock. Logged reason, verbatim: *"the generation provider rejected the request with HTTP 401; this
+is a configuration or request defect, not an outage"*.
+
+**The server was bound to `127.0.0.1` only**, confirmed both from the startup log
+(`Uvicorn running on http://127.0.0.1:8000`) and from `ss`, which showed a single listener on
+`127.0.0.1:8000` and none on `0.0.0.0`. The lifespan boot path ran for real: startup completed past
+the counter, the budget, the `llm_max_tokens <= answer_reserve` check and the client construction —
+a failed check raises `SystemExit` before `yield`, so completion is the evidence. The shutdown log
+ends with `app.main`'s `shutdown complete`, which is emitted after `await app.state.llm.aclose()`
+(`app/main.py:137`, logged at `:141`), so the close ran without raising.
+
+**Key-leak check: four booleans, all `False`** — the `llm_api_key` and the `voyage_api_key`, each
+checked against both `/tmp/c89/smoke-server.log` and `/tmp/c89/smoke-response.json`. Neither key
+was printed at any point.
+
+**Run-command deviation, recorded rather than hidden.** `README.md:210` documents
+`uv run uvicorn app.main:app --reload`; the smoke ran the same app without `--reload`, so there was
+one PID to stop and one clean shutdown log to read instead of a reloader and a child. Same
+application, same settings.
+
+**What the smoke does and does not establish.** It establishes that the wiring reaches the provider
+with a well-formed request, and that the §B addendum behaves live exactly as designed. It does
+**not** establish the success path: that `stop_reason`, the `content` block list and `usage` come
+back in the shape §C describes is still verified only against `httpx.MockTransport`.
+
+### H. Deviations
+
+**One, and it is a test-assertion repair.** `tests/test_generation.py` checks that the prompt file
+says what it must; the first version matched the raw string `"does not contain"`, and
+`answer_v1.md` is hard-wrapped so the phrase straddles a newline. Fixed by collapsing whitespace
+before matching — the phrase still has to be there, in order. **The prompt file was not edited to
+satisfy the test.** No fixture, threshold, tolerance or expected value was moved to make anything
+pass.
+
+The fixture repair in `tests/test_query_endpoint.py` is not a deviation — 8.8 §L names it as the
+one repair allowed: every hit now has a distinct `(document_id, char_start, char_end)`, because the
+old fixture gave them all the same span and therefore described a retrieval `provenance.render()`
+rejects as a `DuplicateLocator`. An honesty repair, not a pass-making one.
+
+### I. Correction to 8.8
+
+**8.8's Step 03 — Agents.md citations are pinned to vault `efc46e7`.** The entry's citation
+convention pins `09_Memory/DECISIONS.md` citations to that revision but leaves the
+`Step 03 — Agents.md` line numbers (`:27-38`, `:100-106`, `:108-113`, `:115-117`, `:116`, `:126`,
+`:128`, `:139`) unpinned; they are vault-relative and read at vault `efc46e7`.
+
+Also settled by execution: 8.8 §G recorded, from the 8.8 report, that `tiktoken` was "declared but
+not installed" (`pyproject.toml:38-41`). **At this revision it is installed — 0.8.0 — and the
+cl100k_base cache is present** at `models/tiktoken/` (the path `TiktokenCounter` resolves itself,
+`app/services/context_budget.py:66`). The §G precondition is satisfied, not waived.
+
+### J. Open items carried forward
+
+From 8.8 §O, unchanged:
+
+1. `citations[].id` / `citations[].score` (report Open 5).
+2. Ingestion re-insert behaviour (report Open 7).
+3. A digest-equivalent for generation output (report Open 9). `FakeLLMClient` makes the tests
+   deterministic; that is not the same thing as pinning generation output.
+
+New, opened by 8.9 (numbering continues; §G's smoke has already closed part of 4 and 5):
+
+4. **The success path is NOT ESTABLISHED by execution.** The one consented smoke call was made and
+   the configured `llm_api_key` was **rejected with HTTP 401**, so no successful generation has
+   ever happened against the live API. A re-run needs a valid Anthropic key **and fresh consent** —
+   the 8.8 §N allowance is spent.
+5. **Narrowed by the smoke.** The boot path and `aclose()` were exercised live (§G) and are no
+   longer inferred. What remains unexercised is the **failure** branch: no run has ever had
+   `llm_max_tokens > answer_reserve`, so the `SystemExit` at `app/main.py:90-94` has never fired,
+   in a test or otherwise.
+6. **`citations == included` is asserted only where nothing is excluded.** Both fixture hits fit at
+   `top_k=5`, so the case where `plan_context` drops a hit — and the citation list is genuinely
+   shorter than `result.hits` — has no test. 8.8 §F anticipated exactly this.
+7. **HARD RULE.** The route makes a paid call per request and has no authentication or rate
+   limiting. **Until chunk 8.10 lands, the server is never bound beyond `127.0.0.1`.** This is not
+   a preference or a deployment note: an open route that spends money per request is an unmetered
+   bill payable by anyone who can reach the port. Step 04 owns authentication; this rule holds
+   regardless of when Step 04 arrives.
+
+---
+
 ## 2026-09-11 — Chunk 8.8 — generation: SCOPED; design PRE-REGISTERED, not implemented
 
 > **Line-citation convention for this entry.** Every path below is repo-root-relative and every

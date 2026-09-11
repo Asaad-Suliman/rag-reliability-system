@@ -1,4 +1,4 @@
-"""Query endpoint — retrieval plus the far-field gate. No generation.
+"""Query endpoint — retrieval, the far-field gate, then generation.
 
 **Before any deployment this route needs authentication, rate limiting and
 CORS. None of the three exists in this codebase** — see `app/core/security.py`,
@@ -16,6 +16,9 @@ import logging
 from fastapi import APIRouter, Request
 
 from app.schemas.query import CitationOut, QueryRequest, QueryResponse
+from app.services.context_budget import ContextBudget, TokenCounter, plan_context
+from app.services.generation import LLMClient, build_user_message, load_prompt
+from app.services.provenance import render
 from app.services.reranking import RERANK_N, Reranker
 from app.services.retrieval import (
     DEFAULT_CANDIDATE_K,
@@ -45,11 +48,16 @@ _VERDICT_MEANING: dict[FarFieldVerdict, str] = {
         "cover this subject. The citations below are what triggered the refusal."
     ),
     "ANSWER_UNVERIFIED": (
-        "The corpus is near enough to be relevant, and these are the passages retrieved. "
-        "Whether they actually support an answer is NOT ESTABLISHED — no groundedness "
-        "check exists, and no answer is generated."
+        "The corpus is near enough to be relevant, so an answer was generated from the "
+        "passages below. Whether those passages actually support that answer is NOT "
+        "ESTABLISHED — no groundedness check exists in this system."
     ),
 }
+
+# Read once at import, not per request: the prompt is a committed file, so a
+# per-request read would be a filesystem hit that can only ever return the same
+# bytes.
+_SYSTEM_PROMPT = load_prompt("answer_v1")
 
 
 @router.post("", response_model=QueryResponse, summary="Retrieve and judge")
@@ -61,8 +69,14 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
     4xx. Only an unjudgeable retrieval is an error, and that leaves as a 503 via
     `FarFieldInputError` (see `app/core/errors.py`).
 
-    No answer is produced. Generation is not implemented anywhere in this
-    codebase; this route returns the verdict and its citations and stops.
+    On ABSTAIN_OUT_OF_DOMAIN the model is never called: `answer` is null and
+    the citations are the retrieval that triggered the refusal. On
+    ANSWER_UNVERIFIED the retrieval is budgeted, rendered and generated from,
+    and the citations are the chunks the model actually saw — `included`, not
+    every hit. Nothing here checks that the answer follows from them.
+
+    A generation failure is a 503, never a 200 carrying a partial answer (see
+    `app/core/errors.py`).
     """
     store: VectorStore = request.app.state.vector_store
     reranker: Reranker = request.app.state.reranker
@@ -85,10 +99,29 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
         "query judged",
         extra={"verdict": decision.verdict, "top_1_distance": decision.top1_distance},
     )
+
+    answer: str | None = None
+    cited = result.hits
+    if decision.verdict != "ABSTAIN_OUT_OF_DOMAIN":
+        counter: TokenCounter = request.app.state.counter
+        budget: ContextBudget = request.app.state.budget
+        llm: LLMClient = request.app.state.llm
+
+        budgeted = plan_context(result.hits, budget, counter)
+        rendered = render(budgeted.included, counter.count)
+        generated = await llm.generate(
+            _SYSTEM_PROMPT, build_user_message(body.question.strip(), rendered.text)
+        )
+        answer = generated.text
+        # The chunks the model saw, not every hit retrieved: a citation the
+        # model never read is not evidence for what it wrote.
+        cited = budgeted.included
+
     return QueryResponse(
         verdict=decision.verdict,
         verdict_meaning=_VERDICT_MEANING[decision.verdict],
         top_1_distance=decision.top1_distance,
+        answer=answer,
         citations=[
             CitationOut(
                 chunk_id=hit.chunk_id,
@@ -101,6 +134,6 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
                 vector_distance=hit.vector_distance,
                 rerank_score=hit.rerank_score,
             )
-            for hit in result.hits
+            for hit in cited
         ],
     )

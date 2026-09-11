@@ -1,10 +1,13 @@
-"""Query payloads — the retrieval-side far-field gate's request and response shape.
+"""Query payloads — the far-field gate's request and response shape, with an answer.
 
-There is deliberately **no answer field**. No generation step is committed
-anywhere in this codebase (`llm_api_key` is configured but read only by the
-readiness probe, for presence), so a `answer: str | None` here would be a null
-that never fills — a promise the system cannot keep. When generation arrives it
-adds a field; it does not un-lie about one.
+`answer: str | None` exists as of chunk 8.9, because generation now exists
+(`app/services/generation.py`). The field was deliberately absent until then:
+a null that never fills is a promise the system cannot keep. It is still null
+on `ABSTAIN_OUT_OF_DOMAIN`, where the model is never called, and that null is
+a statement about the verdict, not an unfilled placeholder.
+
+Nothing here claims the answer is grounded in the citations beside it. No
+groundedness check exists; that is the Verifier's job and it is not built.
 """
 
 from __future__ import annotations
@@ -78,9 +81,14 @@ class QueryResponse(BaseModel):
     human reading the raw JSON. Citations are returned in **both** verdict
     cases: a refusal a caller cannot inspect is a refusal they have to take on
     trust.
+
+    `answer` is null on a refusal (the model is never called) and is placed
+    after the verdict fields for the same reason: the verdict is what qualifies
+    the answer, so it is read first.
     """
 
     verdict: FarFieldVerdict
     verdict_meaning: str
     top_1_distance: float
+    answer: str | None
     citations: list[CitationOut]
