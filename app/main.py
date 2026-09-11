@@ -16,7 +16,9 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
 from app.db.session import create_engine, create_session_factory, ping
 from app.documents.status import assert_status_enum_matches_db
+from app.services.context_budget import ContextBudget, TiktokenCounter
 from app.services.embeddings import VoyageEmbedder
+from app.services.generation import AnthropicClient
 from app.services.reranking import RerankerModelMissing, build_reranker
 from app.services.vector_store import CORPUS_DIR, ExactVectorStore
 
@@ -68,6 +70,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         },
     )
 
+    # ONE counter, ONE budget, ONE LLM client for the process.
+    #
+    # The counter is built here, not per request: a missing or stale tiktoken
+    # cache is a deployment defect, and `TiktokenCounter` raises on it. Built at
+    # boot it fails the boot; built per request it would fail every request
+    # individually, after the request had already spent a retrieval. Same object
+    # is then shared by `plan_context` and `render`, so the tokens the budgeter
+    # counted are the tokens the renderer counted.
+    app.state.counter = TiktokenCounter()
+    app.state.budget = ContextBudget()
+
+    # Fatal, and checked before the client exists: `llm_max_tokens` is what the
+    # provider may spend on the answer, `answer_reserve` is what the budgeter
+    # held back for it. Configured the wrong way round, the model is licensed to
+    # write an answer longer than the space reserved for it -- a silently
+    # over-budget prompt, discovered in production. It is a config error, so it
+    # fails the boot rather than degrading.
+    if settings.llm_max_tokens > app.state.budget.answer_reserve:
+        raise SystemExit(
+            f"startup aborted: llm_max_tokens={settings.llm_max_tokens} exceeds the "
+            f"budgeter's answer_reserve={app.state.budget.answer_reserve}"
+        )
+
+    # Like the embedder: constructed once, no connection opened, no cost until
+    # `generate()` is called.
+    app.state.llm = AnthropicClient(
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        max_tokens=settings.llm_max_tokens,
+        timeout=settings.llm_timeout,
+    )
+
     # Probe both dependencies, but never abort startup over them: /health/ready
     # has to stay reachable to *report* a dependency being down.
     postgres_reachable = False
@@ -100,6 +134,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    await app.state.llm.aclose()
     await app.state.engine.dispose()
     app.state.vector_store.close()
     app.state.reranker.close()

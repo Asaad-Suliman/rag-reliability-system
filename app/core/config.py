@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # --- llm provider (required) ---
     llm_api_key: SecretStr
     llm_model: str = "claude-sonnet-5"
+    llm_timeout: float = 60.0
+    # Must not exceed `ContextBudget.answer_reserve` -- asserted at startup in
+    # `app/main.py`, not here: this module must not import the budgeter.
+    llm_max_tokens: int = 1024
 
     # --- embedding provider (required) ---
     voyage_api_key: SecretStr

@@ -18,6 +18,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.core.middleware import REQUEST_ID_HEADER, get_request_id
+from app.services.generation import (
+    GenerationFailed,
+    GenerationUpstreamError,
+    ProviderRequestError,
+)
 from app.services.retrieval import FarFieldInputError
 from app.services.vector_store import CorpusUnavailableError
 
@@ -204,6 +209,68 @@ async def corpus_unavailable_handler(request: Request, exc: Exception) -> Respon
     )
 
 
+async def generation_upstream_handler(request: Request, exc: Exception) -> Response:
+    """`GenerationUpstreamError` -> 503 UPSTREAM_UNAVAILABLE (8.8 §J).
+
+    Timeout, transport error, 429 or any 5xx from the generation provider. The
+    same reasoning as `far_field_input_handler`: nothing here is broken, a
+    dependency is unreachable or busy, and that is retryable. The detail
+    message is deliberately distinct from the generation-failure one below so a
+    client can tell "the provider was not reachable" from "the provider
+    answered and produced nothing usable" without reading logs.
+    """
+    logger.error(
+        "generation provider unavailable",
+        extra={"path": request.url.path, "reason": str(exc)},
+    )
+    return error_response(
+        request,
+        code=ErrorCode.UPSTREAM_UNAVAILABLE,
+        status_code=503,
+        message="The answer service is unavailable. Retry shortly.",
+    )
+
+
+async def generation_failed_handler(request: Request, exc: Exception) -> Response:
+    """`GenerationFailed` -> 503 UPSTREAM_UNAVAILABLE (8.8 §J).
+
+    The provider answered and the answer is unusable: truncated at max_tokens,
+    refused, or empty. 503 rather than 500 because no code path is broken, and
+    never a 200 with a partial answer -- returning half a truncated answer as
+    if it were complete is exactly the failure this system exists to not make.
+    """
+    logger.warning(
+        "generation produced no usable answer",
+        extra={"path": request.url.path, "reason": str(exc)},
+    )
+    return error_response(
+        request,
+        code=ErrorCode.UPSTREAM_UNAVAILABLE,
+        status_code=503,
+        message="No answer could be generated for this question. Retry shortly.",
+    )
+
+
+async def provider_request_handler(request: Request, exc: Exception) -> Response:
+    """`ProviderRequestError` -> 500 INTERNAL_ERROR.
+
+    A non-429 4xx from the provider -- a bad key, a bad model name, a malformed
+    body. Retrying cannot fix any of those, so calling it UPSTREAM_UNAVAILABLE
+    would invite a retry loop against a defect on this side. (8.8 §J does not
+    cover it; decided in 8.9.)
+    """
+    logger.error(
+        "generation provider rejected the request",
+        extra={"path": request.url.path, "reason": str(exc)},
+    )
+    return error_response(
+        request,
+        code=ErrorCode.INTERNAL_ERROR,
+        status_code=500,
+        message="An internal error occurred.",
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> Response:
     """Last resort: log the traceback server-side, return only the request id."""
     request_id = request_id_of(request)
@@ -231,6 +298,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(FarFieldInputError, far_field_input_handler)
     app.add_exception_handler(CorpusUnavailableError, corpus_unavailable_handler)
+    app.add_exception_handler(GenerationUpstreamError, generation_upstream_handler)
+    app.add_exception_handler(GenerationFailed, generation_failed_handler)
+    app.add_exception_handler(ProviderRequestError, provider_request_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
