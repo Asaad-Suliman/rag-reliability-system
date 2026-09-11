@@ -13,6 +13,137 @@ Newest entries first.
 
 ---
 
+## 2026-09-11 — Chunk 8.8 — generation: SCOPED; design PRE-REGISTERED, not implemented
+
+> **Line-citation convention for this entry.** Every path below is repo-root-relative and every
+> citation is pinned to a named revision: source and `docs/DECISIONS.md` citations to **`9330033`**,
+> `09_Memory/DECISIONS.md` citations to **`efc46e7`** — the revisions immediately before this entry
+> was written. Prepending an entry shifts every line number beneath it, so an unpinned self-citation
+> is stale the moment it is committed. Files are cited by full path throughout:
+> `app/api/v1/query.py` and `app/schemas/query.py` share a basename, and a bare `query.py` would be
+> ambiguous between them.
+
+**Status: DECIDED (design). Implementation is chunk 8.9.**
+
+**Decision, in one line.** The generation step is designed and recorded here, on paper, before any
+of it is built: nothing in this entry is implemented, and every choice below is pre-registered so
+that chunk 8.9 is held to it.
+
+**Evidence.** `rag-reliability/passes/c88a-scoping.md`, sha256
+`893e52d749df8697c9763da65c7c854e2d56a5be1f14f85a00b781c4185ac4a8` (file digest; the report also
+carries a self-excluding digest
+`0c3233011d31b66771e0c714dad44430edaf81ce74ebb860b1d01422c89ff22b`), taken at repo `9330033` /
+vault `efc46e7`.
+
+---
+
+### A. Why pre-register
+
+No generation design exists anywhere. The Step 03 chunk table (`Step 03 — Agents.md:27-38`) has no
+generation chunk, and the Verifier (`:108-113`) presumes a draft answer without saying what produces
+it (report P4).
+
+### B. Build-order deviation
+
+Generation is built **before** the Guardrail, deliberately departing from the Step 03 table. Reason:
+the Verifier and the Guardrail's output scan (`:100-106`) both need an answer to exist. Mitigation
+from day one: retrieved text enters the prompt in a delimited, clearly-untrusted block (`:115-117`).
+"Guardrail runs before generation" (`:126`) is a runtime-order rule and is honoured when the
+Guardrail lands, by placing it before the generate call. The Step 03 table is not edited; this entry
+is the record.
+
+### C. Response shape
+
+`QueryResponse` gains `answer: str | None`. `verdict` stays the first key. `QueryResponse` is
+recorded as **not** an implementation of API Contract §5.1 (4 fields vs 11); §5.1 convergence
+(`content`, `citations[].id`, `citations[].score`, `trust`, `guardrail`, `plan`, `timings_ms`) is
+deferred to the frontend phase. This also settles report Open 3: `verdict_meaning` text changes on
+this endpoint are not §5.1 contract changes. The v1.1.0 trigger does not fire (report Q2).
+
+### D. Abstain path
+
+On `ABSTAIN_OUT_OF_DOMAIN` the LLM is never called and `answer` is null. Citations are still returned
+on both verdicts (`app/schemas/query.py:78-80`).
+
+### E. Verdicts
+
+Verdict values are unchanged; generation stays `ANSWER_UNVERIFIED` and `ANSWER` remains unreachable
+until a Verifier exists. The `ANSWER_UNVERIFIED` `verdict_meaning` is rewritten to state that an
+answer is generated and its grounding is **NOT ESTABLISHED** (keeping that phrase).
+
+### F. Citations
+
+Built from `plan_context`'s `included` — the chunks the model saw — not all of `result.hits`. A test
+asserts the equality that holds at `top_k=5` today.
+
+### G. Token counter
+
+One `TiktokenCounter` constructed at application startup and shared by `plan_context` and `render`.
+A missing cache fails at boot, never per request. 8.9 must first verify whether `tiktoken` is
+installed (report: declared but not installed, `pyproject.toml:38-41`).
+
+### H. LLM client
+
+Direct `httpx` — already a dependency — to the Anthropic Messages API; no new SDK. An `LLMClient`
+Protocol, a `FakeLLMClient`, and the client on `app.state.llm`, built in `app/main.py`'s lifespan
+like the embedder (report Q4). New settings `llm_timeout` and `llm_max_tokens`; `llm_max_tokens` must
+not exceed `ContextBudget.answer_reserve`, checked at startup. Model from existing `llm_model`. The
+endpoint URL, headers, and API version are verified against docs.claude.com in 8.9, not assumed.
+
+### I. Output
+
+Plain text, one attempt, no retries. The JSON-validation and repair-retry path
+(`Step 03 — Agents.md:128`) applies to Verifier output, not here.
+
+### J. Failure paths
+
+Timeout, transport error, 429, and 5xx map to 503 `UPSTREAM_UNAVAILABLE` (satisfying
+`Step 03 — Agents.md:139`). A stop reason other than normal completion — max-tokens truncation,
+provider refusal — or an empty completion is a generation failure and maps to 503 with a distinct
+detail message; a partial or empty answer is never returned as success. Invariant violations
+(`DuplicateLocator`, `BudgetError` subclasses) stay 500 as defects. The API key and prompt text are
+never logged; latency and token usage are.
+
+### K. Prompt
+
+A versioned file under `app/agents/prompts/`, never an inline string (`Step 03 — Agents.md:116`). It
+instructs the model to answer only from the delimited context and to say so when the context does not
+contain the answer. No claim is made that this prevents ungrounded output; that is the Verifier's job.
+
+### L. Tests
+
+All $0 and offline via `FakeLLMClient`. `tests/test_query_endpoint.py:109` is rewritten on purpose —
+the `answer` key now exists — and the fixture is repaired to give hits distinct locators (chunk 8.7
+open item 4; an honesty repair, not a pass-making one). New assertions cover the answer on
+`ANSWER_UNVERIFIED`, the fake-never-called-and-null-answer case on ABSTAIN, the timeout → 503 case,
+and `citations == included`.
+
+### M. Gate discipline
+
+Generation sits off the measured path (report P6). The 12 gate figures and `_PRE_RERANK_DIGEST` must
+reproduce byte-identically after 8.9. No generation-quality metric is pre-registered here.
+
+### N. Paid calls
+
+The fake is the default everywhere. Exactly one real smoke call at the end of 8.9, only with Asaad's
+explicit consent.
+
+### O. Open items carried forward
+
+1. `citations[].id` / `citations[].score` (report Open 5).
+2. Ingestion re-insert behaviour (report Open 7).
+3. A digest-equivalent for generation output (report Open 9).
+
+### P. Corrections
+
+- The committed 8.7a report cites the both-verdicts rule at `app/api/v1/query.py:79-80`; it is at
+  `app/schemas/query.py:78-80`.
+- The 8.8a brief's six contradictions are listed in the report's "Brief contradictions" section.
+- Mirror convention clarified: DECISIONS entries are byte-identical across repo and vault; the whole
+  files are not — headers differ, and the vault carries lines the mirror lacks.
+
+---
+
 ## 2026-09-11 — Chunk 8.7: provenance renderer route wiring SCOPED, then REJECTED (S1). The renderer stays out of `app/api/v1/query.py`; `CitationOut` construction is unchanged.
 
 > **Line-citation convention for this entry.** Every path below is repo-root-relative and every
