@@ -13,6 +13,114 @@ Newest entries first.
 
 ---
 
+## 2026-09-11 — Chunk 8.7: provenance renderer route wiring SCOPED, then REJECTED (S1). The renderer stays out of `app/api/v1/query.py`; `CitationOut` construction is unchanged.
+
+> **Line-citation convention for this entry.** Every path below is repo-root-relative and every
+> citation is pinned to a named revision: source and `docs/DECISIONS.md` citations to **`3318ad17`**,
+> `09_Memory/DECISIONS.md` citations to **`005f224`** — the revisions immediately before this entry
+> was written. Prepending an entry shifts every line number beneath it, so an unpinned self-citation
+> is stale the moment it is committed. Files are cited by full path throughout:
+> `app/api/v1/query.py` and `app/schemas/query.py` share a basename, and a bare `query.py` would be
+> ambiguous between them.
+
+**Status: DECIDED.**
+
+**Decision, in one line.** The provenance renderer is **not** wired into `app/api/v1/query.py`.
+The `CitationOut` construction there is unchanged. Option S1 of the scoping pass — do nothing — is
+the one taken; the three alternatives it identified are not.
+
+---
+
+### A. Evidence
+
+The decision rests on one read-only scoping pass, preserved rather than summarised:
+`rag-reliability/passes/c87a-inventory.md`, sha256
+`e64c176c2196ca8fae83e5e2a523a0efe069c7e3cfd94877374f24389dbbc2c6`, taken at repo `3318ad17` /
+vault `005f224`. Every claim below is cited to that report's own question sections, which carry the
+underlying `file:line` evidence.
+
+The pass executed nothing — no test, no script — and wrote only outside both trees. Both repositories
+were verified clean and unmoved at the start and the end of it.
+
+### B. Why: no consumer
+
+No generation step and no Verifier exist anywhere in `app/`. `RenderedContext.text` and
+`RenderedContext.citations` therefore have no receiver on the route (report Q1). The renderer's two
+outputs are built for a generator that does not exist and a Verifier that does not exist, and the
+route's own docstring already states that generation is not implemented in this codebase.
+
+Wiring a producer to no consumer is the whole of the finding. Everything in §C and §D is what that
+costs.
+
+### C. Why: no value
+
+`render()` could source **6 of 9** `CitationOut` fields — `chunk_id`, `document_id`,
+`document_name`, `page`, `char_start`, `char_end` — and all six are **identical pass-throughs**: the
+same attribute read off the same hit, with no transformation (report Q2).
+
+The remaining three have no equivalent in the provenance module at all. `text` is not a field on
+`Citation`; it survives only inside the concatenated `RenderedContext.text`. `vector_distance` and
+`rerank_score` are outside the `ChunkRecord` protocol, so the renderer never sees them. All three
+would continue to be read off the hit exactly as they are today.
+
+So the renderer cannot replace the construction. It can only duplicate two-thirds of it.
+
+### D. Why: added risk
+
+`render()` introduces `DuplicateLocator`, and an injected `TiktokenCounter` introduces
+`TiktokenCacheMissing`, as **unhandled raises on a path that returns 200 today** (report Q3). Neither
+has an exception handler.
+
+Placement matters and makes it worse. Placed **before** `far_field_gate`, a raise **pre-empts the
+gate's execution** entirely: the request that would have returned `ABSTAIN_OUT_OF_DOMAIN` returns a
+500 instead (report Q4). The gate's input values are never altered — `Retrieval` and `RetrievedChunk`
+are frozen and the renderer mutates nothing — but the gate does not run. A far-field refusal is this
+endpoint working, not failing, and converting one into a 500 is a material change to what the route
+does.
+
+### E. Revisit trigger
+
+**The first chunk that adds a generation step.** The renderer is wired there, where its output has a
+consumer. Not before.
+
+### F. Open items carried forward
+
+1. **Whether the live corpus can return two hits sharing `(document_id, char_start, char_end)`:
+   NOT ESTABLISHED.** This must be settled before `render()` is placed on any request path. The
+   fuser dedupes by `chunk_id` only, by design — `app/services/retrieval.py:320-323` at `3318ad17`
+   records that a span-overlap rule would drop the neighbour chunk that q11-q13 of the golden set
+   specifically need retrieved.
+2. **No exception handler exists for `DuplicateLocator` or `TiktokenCacheMissing`**
+   (`app/core/errors.py` at `3318ad17`).
+3. **`tests/test_query_endpoint.py` asserts 1 of 9 `CitationOut` fields.** A `CitationOut` change
+   would pass it silently.
+4. **The endpoint test fixture's hits collide on locator**
+   (`tests/test_query_endpoint.py:41-69` at `3318ad17`).
+
+### G. Process correction
+
+Gate-adjacent STOP conditions are phrased as **"reorders, mutates, or pre-empts the gate's
+execution"**, not **"reads"**. Every consumer of `hits` reads the gate's input surface, so a
+read-based stop condition fires on every candidate path and discriminates nothing. The scoping brief
+used "reads" and the condition was tripped by all of them; the three verbs that actually separate the
+options are reorder, mutate, and pre-empt.
+
+### H. Brief corrections
+
+Recorded because the scoping brief's own line references were off and would otherwise propagate.
+All at `3318ad17`:
+
+- The `CitationOut` constructor spans `app/api/v1/query.py:93-103`. The wider `:92-105` is the
+  list-comprehension span.
+- `retrieve()` has returned after `:81`. Line `:82` is blank.
+- The verdict is bound at `:83`. Line `:84` is its first reader, not its origin.
+- **`render()`, not `render_header`/`render_block`, is the only producer of `Citation` objects.**
+  The two named functions each return a bare string and no citation at all — which is why the
+  `count_tokens` injection, the locator dict, and `DuplicateLocator` all come with any wiring that
+  actually produces citations.
+
+---
+
 ## 2026-09-10 — Chunks 8.5 + 8.6: the budget validator was certifying a counter demoted on 2026-08-25, and its "equal-cost" fixtures were false under ANY counter. Re-pointed to `TiktokenCounter`, fixtures repaired to prose, all ten checks run for real, `plan_context`'s dormant default exercised.
 
 > **Line-citation convention for this entry.** Every path below is repo-root-relative and every
