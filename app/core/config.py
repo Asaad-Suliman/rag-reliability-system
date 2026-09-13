@@ -93,6 +93,34 @@ class Settings(BaseSettings):
     # `app/main.py`, not here: this module must not import the budgeter.
     llm_max_tokens: int = 1024
 
+    # --- client credential and request limits (chunk 8.10) ---
+    # An interim MACHINE credential, not a user identity: one shared key, sent in
+    # the `X-API-Key` header. Deliberately not `Authorization: Bearer`, which is
+    # reserved for Step 04's JWTs, so Step 04 can delete this path in one commit
+    # rather than untangle it from a header it needs.
+    #
+    # Required with no default, like every other secret here, and additionally
+    # length-checked: a 4-character shared key is a credential in name only, and
+    # the whole point of this setting is that the route stops being open. 32
+    # characters is the floor, not a recommendation -- generate one with
+    # `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+    #
+    # Only its sha256 digest is kept at runtime (`app/main.py` lifespan); the raw
+    # value is never logged or echoed.
+    client_api_key: SecretStr = Field(min_length=32)
+
+    # 20/minute, from API Contract section 7's generation figure for
+    # `POST /conversations/*/messages` -- not the 120 "everything else" default.
+    # This route calls the same paid model per request, so the generation number
+    # is the one that describes its cost.
+    rate_limit_per_minute: int = Field(default=20, ge=1)
+
+    # A per-UTC-day ceiling on ADMITTED requests. The per-minute limit alone
+    # bounds a burst, not a bill: 20/minute sustained is 28,800 paid calls a day.
+    # Charged on admission, before retrieval, so a request that later fails in
+    # embedding or generation still counts -- it spent money either way.
+    daily_request_cap: int = Field(default=200, ge=1)
+
     # --- embedding provider (required) ---
     voyage_api_key: SecretStr
     voyage_model: str = "voyage-4-lite"

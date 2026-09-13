@@ -13,6 +13,242 @@ Newest entries first.
 
 ---
 
+## 2026-09-11 — Chunk 8.10 — client credential, rate limit, daily cap
+
+> **Line-citation convention.** Every path is repo-root-relative. Source citations are to the
+> working tree this entry describes: repo HEAD `1729ad4` plus the staged 8.10 diff, and once that
+> diff is committed they are pinned to that commit. Vault citations are pinned to `77629b6` —
+> `09_Memory/` and `rag-reliability/` are byte-identical between `77629b6` and vault HEAD
+> `0b09b31`; the two intervening `auto: vault sync` commits touched only
+> `02_Areas/DeviceHealth/`. `docs/DECISIONS.md` self-citations are to `1729ad4`, since prepending
+> an entry shifts every line beneath it. `app/api/v1/query.py` and `app/schemas/query.py` share a
+> basename, so both are always cited in full.
+
+> **Pre-registered.** `/tmp/c810/prereg.md`, sha256
+> `e5b7d68f6b8b63c955a87168d83641c2f0f773b2f4d34f1581d91658c8b09f9b`, written
+> `2026-09-11 15:46:35 UTC`. The first code edit came at ~`15:52 UTC`, six
+> minutes later, so D1–D14 were fixed before any file was touched. (`/tmp` was
+> cleared between the build and the close session on 2026-09-13; the block was
+> rewritten from the brief and reproduces that hash byte-for-byte.)
+>
+> **Status: BUILT AND VERIFIED, STAGED, NOT COMMITTED.** All six tests, mypy
+> --strict, pre-commit and gitleaks pass; the benchmark gate reproduces
+> byte-identically. See §F for the one failure that occurred mid-build and how
+> it was resolved.
+
+Until this chunk, `POST /api/v1/query` was open: anyone who could reach the port
+could spend money through it without limit, one paid embedding plus one paid
+model call per request. This chunk closes that with the smallest thing that
+works — one shared machine credential and two in-memory counters — and
+deliberately does not invent the auth policy Step 04 owns.
+
+### A. What landed
+
+| # | File | Change |
+|---|---|---|
+| 1 | `app/core/config.py` | `client_api_key: SecretStr` (required, `min_length=32`), `rate_limit_per_minute: int = 20`, `daily_request_cap: int = 200` |
+| 2 | `app/core/security.py` | Was a docstring-only placeholder. Now `key_digest`, `LimitDecision`, `RateLimiter` (injectable clock), `guard_query` |
+| 3 | `app/core/errors.py` | `AppError` gains optional `headers`, passed through by `app_error_handler` (closes 8.10a Open 12) |
+| 4 | `app/core/logging.py` | **Not in the build brief's file list.** Required by D3 — see §D |
+| 5 | `app/main.py` | Lifespan stores the digest and one limiter; startup log names both limits and says they are per-process |
+| 6 | `app/api/v1/query.py` | `dependencies=[Depends(guard_query)]` on the router; docstring rewritten (it claimed none of this existed) |
+| 7 | `README.md` | Run command pinned to `--workers 1 --host 127.0.0.1`, both with reasons; `/query` curl; the header contract |
+| 8 | `tests/test_query_endpoint.py` | The credential on all 8 existing calls, plus the D11 block |
+| 9 | `.env.example` | `CLIENT_API_KEY` placeholder, so the file's "every key the application reads is listed here" claim stays true |
+
+`git diff --cached --stat`: 9 files, +586/−31, touching `app/`, `tests/`,
+`README.md` and `.env.example`.
+
+### B. The decisions, and how each came out
+
+| D | Decision | Outcome |
+|---|---|---|
+| D1 | Credential in `X-API-Key`, not `Authorization: Bearer` | DONE. No new dependency, no persisted state |
+| D2 | `SecretStr`, required, min 32; only the sha256 digest kept | DONE, and kept required-with-no-default through §F |
+| D3 | `hmac.compare_digest`; identical 401 for missing and wrong; redaction covers the names | DONE; forced the `logging.py` change (§D) |
+| D4 | Router dependency; auth → minute → day → body | DONE. Order **verified empirically**, not assumed |
+| D5 | 20/minute, fixed 60s window, global | DONE |
+| D6 | 200 admitted requests per UTC day, charged before `retrieve()` | DONE. Closes 8.10a Open 11 |
+| D7 | Counters consumed only when all three checks pass | DONE. A 401 and a 429 both consume nothing |
+| D8 | Two distinct messages under one `RATE_LIMITED`; `Retry-After` to window end / to midnight | DONE |
+| D9 | Three rate headers on 200 and 429 | DONE |
+| D10 | One in-process limiter, injectable clock, `--workers 1` pinned | DONE |
+| D11 | The listed test assertions | DONE, all passing |
+| D12 | Worst-case token bound | DONE — §E |
+| D13 | Localhost rule replaced by a conditional one | DONE in the README; this entry records it |
+| D14 | Interim machine credential, outside the Step sequence | DONE, stated in three docstrings |
+
+Nothing deviated from D1–D14. The one unlisted file (§D) was required *by* D3.
+
+### C. Contract deviations, recorded
+
+1. **`X-API-Key` is not in the API Contract.** No header is defined for this. It
+   is deliberately not `Authorization: Bearer`, which Step 04 needs for JWTs —
+   keeping the two off one header means Step 04 deletes this path in one commit
+   instead of disentangling two schemes.
+2. **`RATE_LIMITED` is reused for the daily cap.** The contract has no budget or
+   quota code, and adding one is a breaking change (API Contract `:16`). The two
+   refusals are distinguished by message and by where `Retry-After` points — the
+   end of the minute, or 00:00 UTC.
+3. **The three rate headers are not on "every response"** (`:299`). They are on
+   `/query` 200s and 429s only: health routes never run the limiter, and a 5xx
+   raised later in the handler leaves through an exception handler that never saw
+   the limiter's decision.
+4. **`POST /api/v1/query` is absent from the contract entirely.** The 20/minute
+   figure is borrowed from `:294`'s `POST /conversations/*/messages`, because that
+   is the other route that calls a paid model per request — not `:297`'s default
+   of 120.
+
+### D. Unlisted change: `app/core/logging.py`
+
+D3 says the header **and field names** must be covered by the redaction and asks
+for proof. Probing before editing found two real holes. **Both were
+pre-existing** — they were latent in the redaction from the day it was written,
+not introduced by this chunk; D2's new setting is simply the first name that
+walks into the first one. **Both are now closed, with a test.**
+
+1. `client_api_key=secret` was **not** redacted. `_SECRET_ASSIGNMENT` anchors on
+   `\b(...|api[_-]?key|...)`, and there is no word boundary between `_` and `a`,
+   so the very setting D2 introduces would have logged in the clear. Now matched
+   with its identifier prefix intact — `client_api_key=***`, not `api_key=***`.
+   Any prefixed credential name — `db_password`, `service_token` — was equally
+   exposed before and is covered now.
+2. A credential passed as a **dict key** — `extra={"client_api_key": key}` — was
+   redacted by nothing at all. `scrub` walks a payload key by key, so the value
+   arrives as a bare string with no `key=` context for the text rule to find.
+   `scrub` now redacts any value whose key name is credential-shaped, hyphens
+   included, so `x-api-key` is covered too. This hole applied to **every**
+   structured log call in the codebase, not just this route's.
+
+`X-API-Key: <value>` as free text was already covered. The code never logs the
+key; this is the second line of defence, and it was not holding.
+
+### E. Worst-case spend (D12) — tokens only
+
+Measured with the real `TiktokenCounter`, `top_k=5`, question and all five chunks
+at `CORPUS_MAX_CHUNK_CHARS = 1999`, the committed `answer_v1` prompt, and
+`llm_max_tokens = 1024`.
+
+| | |
+|---|---|
+| System prompt | 278 tokens |
+| Rendered context (5 × 1999 chars) | 6,215 tokens |
+| **Input per request** | **6,810 tokens** |
+| **Output per request** | **≤ 1,024 tokens** (hard cap) |
+| Per minute (20 admitted) | ≤ 156,680 tokens |
+| **Per UTC day (200 admitted)** | in 1,362,000 / out ≤ 204,800 / **total ≤ 1,566,800** |
+| Embedding | 1 call/request, ≤ 1,999 tokens → ≤ 399,800/day |
+| Calls | ≤ 20 gen + 20 embed per minute; ≤ 200 + 200 per UTC day |
+
+The absolute ceiling, at a tokenizer-independent 1 token/char, is ~12,672 input
+tokens per request → **≤ 2,534,400 tokens per UTC day**. The budgeter never
+binds: 6,695 ≤ 193,488 usable, so all five chunks are always included.
+
+Before this chunk the same bound was **unbounded**. Converting these to money is
+Asaad's call.
+
+### F. Gate discipline — the failure, and its resolution
+
+The four §E commands, before any edit: all exit `0`, sha256
+`7fc467cf073427d518fc8de745f21884c4c3590820e9872e53f2acbce8c333a8`, reproducing
+all 12 figures (lexical `0.233 0.400 0.567 0.142`, vector
+`0.833 0.900 1.000 0.700`, hybrid `0.667 0.867 0.967 0.445`), the
+`_PRE_RERANK_DIGEST` run, and the pinned miss set (`ood08 1.4131`,
+`ood01 1.4898`, `ood10 1.4906`).
+
+**After the build, three of the four aborted:**
+
+    SettingsError: missing required environment variables: CLIENT_API_KEY.
+
+This is D2 working exactly as written, reaching further than anyone had written
+down. `Settings` is global: **every** entry point that builds it now needs the
+credential, not only the HTTP app. `app.services.evaluation`, `app.cli evaluate`
+and `app.services.retrieval` serve no HTTP and make no authenticated request,
+yet all three construct `Settings` (through `create_engine` / `run_live`) and so
+all three stopped at boot. `tests.test_far_field_gate` was unaffected; it builds
+no Settings.
+
+**The build stopped there and asked, rather than repairing itself.** Three fixes
+were on the table:
+
+- give `client_api_key` a default — rejected: a default credential is a
+  credential everybody has, and it would silently un-guard the route on any host
+  that forgot to set it. This is precisely the tuning R3 forbids;
+- make the requirement conditional on the entry point — rejected: an
+  entry-point-dependent branch in the settings object, so that the same
+  configuration is valid or invalid depending on which module imported it;
+- **supply the key.** Chosen. Asaad added `CLIENT_API_KEY` to `.env` and a
+  placeholder to `.env.example`. D2 keeps its required-no-default shape.
+
+**The gate then reproduced byte-identically.** Re-run with no special
+environment: all four exit `0`, and the output hashes to
+`7fc467cf073427d518fc8de745f21884c4c3590820e9872e53f2acbce8c333a8` — the
+baseline value, unchanged. All 12 figures, the digest run and the miss set are
+the same bytes they were before this chunk existed. Generation and the guard
+both sit off the measured path, exactly as 8.8 §M required.
+
+(`/tmp` was cleared between sessions, taking `gate-before.txt` with it. The
+comparison was made against the sha256 recorded in the build brief and in §F
+above, which is the stronger check: a hash pinned before the change cannot be
+re-derived from the changed tree.)
+
+### G. Other verification
+
+`pre-commit` on all 9 changed files: PASS (ruff, ruff format, gitleaks, mypy).
+`mypy --strict app scripts tests`: PASS, 62 source files. All six tests exit `0`.
+`gitleaks git --redact .` over full history: 51 commits, 1.62 MB, **no leaks
+found**. `.env` is gitignored (`.gitignore:2`, with `.env.*` and `!.env.example`)
+and untracked.
+
+The D4 ordering was **probed, not assumed**: on FastAPI 0.141.1 / starlette
+1.6.0, a router dependency that raises pre-empts `request_body_to_args`, so a bad
+credential with a malformed body is a 401 and never a 422. Nothing was
+rearranged to make that true.
+
+The credential test asserts what actually costs money: `retrieve()` calls (the
+paid embedding) **and** LLM calls, both `0` on every 401. A guard that stopped
+the model but not the embedder would still be a spend leak.
+
+Adding the credential to the eight existing test requests is a **new required
+input, not a pass-making repair**. No expected value, fixture or threshold was
+changed.
+
+### H. Correction to the 8.10a brief
+
+**Contradiction 6 was wrong.** It claimed `rag-reliability/passes/` does not
+exist in the vault. It does — `/home/asaad/Documents/DevBrain/rag-reliability/passes/`,
+holding every pass report from `chunk71g` to `chunk89`. 8.10a's Step 0 therefore
+scanned `01_Projects/` instead. Harmless in effect: no vault commits followed
+`77629b6`, so the scan had nothing to miss. Recorded so the next chunk looks in
+the right place.
+
+### I. Open items
+
+1. **Offline scripts that serve no HTTP now require a client credential to boot,
+   because `Settings` is global.** Accepted over a conditional requirement, which
+   would be an entry-point-dependent branch. Step 04 revisits it.
+2. **No concurrency cap.** 20/minute bounds arrivals, not simultaneity — 20
+   requests can arrive together and open 20 concurrent provider calls. The
+   per-minute limit is a spend bound, never a load bound.
+3. **Multi-worker state.** The counters are in process memory; N workers serve N
+   times the limit and permit N times the daily spend. `--workers 1` is enforced
+   by a README line, not by code. Redis is the upgrade path.
+4. **TLS (Step 05).** The key is a plaintext bearer secret, so D13's conditional
+   rule keeps the bind on `127.0.0.1` until TLS exists.
+5. **Step 04** decides whether this credential survives beside user JWTs, or is
+   deleted the day they land.
+6. **`/health/ready` is not covered** by the auth test — the harness builds no
+   `app.state.engine`. A fixture gap, not a guard gap: health hangs off a
+   separate router that carries no dependency.
+7. **CORS is still absent.** Unchanged by this chunk; same-origin-only.
+8. **`.env.example`'s new line sits under the `docker-compose.dev.yml` heading**,
+   which is about Postgres credentials. Cosmetic and untouched — it is Asaad's
+   line — but it belongs beside the other provider keys.
+9. **From 8.9, unchanged:** the `budgeted.included` shorter-than-`result.hits`
+   path still has no test.
+
+---
+
 ## 2026-09-11 — Chunk 8.9 — generation implemented per the 8.8 design
 
 > **Line-citation convention.** Every path is repo-root-relative. Source citations are to the

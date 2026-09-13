@@ -1,20 +1,26 @@
 """Query endpoint — retrieval, the far-field gate, then generation.
 
-**Before any deployment this route needs authentication, rate limiting and
-CORS. None of the three exists in this codebase** — see `app/core/security.py`,
-which records that JWT issuing/verification, password hashing and the
-current-user dependency "arrive in Step 04 (API and Auth)". This module does
-not add them: doing so here would invent a policy Step 04 owns. It names them
-so an unauthenticated, unlimited, same-origin-only route is a known state
-rather than an oversight.
+**Authentication and request limits now guard this route; CORS still does not
+exist.** `guard_query` (`app/core/security.py`) is attached to the router, not
+to the handler, so every route added under this prefix inherits it and cannot
+be added unguarded by omission. It checks the shared `X-API-Key` credential,
+then the per-minute limit, then the daily cap, and it runs before the request
+body is validated — so a caller with no credential gets a 401 and never learns
+whether their body was well-formed.
+
+That credential is an interim MACHINE key (chunk 8.10), not a user identity.
+Step 04 still owns JWT issuing/verification, password hashing and the
+current-user dependency, and decides then whether this path survives beside
+them. CORS remains absent: this service is same-origin-only until Step 05.
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from app.core.security import guard_query
 from app.schemas.query import CitationOut, QueryRequest, QueryResponse
 from app.services.context_budget import ContextBudget, TokenCounter, plan_context
 from app.services.generation import LLMClient, build_user_message, load_prompt
@@ -32,7 +38,13 @@ from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/query", tags=["query"])
+# The guard sits on the ROUTER, deliberately. On the handler it would be one
+# decorator away from being forgotten by the next route added here; on the
+# router, forgetting it is impossible without deleting this line. Health is a
+# separate router and is untouched by construction — it takes no credential and
+# consumes no budget, which is what lets a load balancer keep probing a service
+# whose daily cap is exhausted.
+router = APIRouter(prefix="/query", tags=["query"], dependencies=[Depends(guard_query)])
 
 # Said in prose in the response so a human reading raw JSON gets the verdict's
 # meaning without consulting this source. ANSWER is present for completeness of

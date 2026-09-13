@@ -207,13 +207,38 @@ Exit codes are stable and scriptable:
 The HTTP application:
 
 ```bash
-uv run uvicorn app.main:app --reload
-curl -i localhost:8000/api/v1/health          # liveness
+# --workers 1 and --host 127.0.0.1 are both load-bearing; see below.
+uv run uvicorn app.main:app --reload --workers 1 --host 127.0.0.1
+
+curl -i localhost:8000/api/v1/health          # liveness, no credential
 curl -i localhost:8000/api/v1/health/ready    # readiness, 503 when a dependency is down
+
+# /query needs the shared machine credential (CLIENT_API_KEY in .env, 32+ chars,
+# generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))")
+curl -i localhost:8000/api/v1/query \
+  -H "X-API-Key: $CLIENT_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"question": "What is a reranker?"}'
 ```
 
 Every response carries an `X-Request-ID` header, and the same id appears in every
-JSON log line for that request.
+JSON log line for that request. Every `/query` response where the limiter ran —
+200 and 429 alike — also carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
+`X-RateLimit-Reset`, and a 429 adds `Retry-After`.
+
+**`--workers 1` is not a default, it is a correctness requirement.** The
+per-minute limit (20) and the daily cap (200 admitted requests, reset at UTC
+midnight) live in process memory. Each extra worker gets its own counters, so N
+workers serve N times the limit and permit N times the daily spend. Raising the
+worker count without first moving this state to a shared store (Redis) silently
+multiplies the bill. The startup log states the limits and that they are
+per-process.
+
+**`--host 127.0.0.1` stays until there is TLS.** The credential is a bearer
+secret: it travels in a plain header, so on plain HTTP anyone on the path can
+read it and replay it. Binding beyond localhost is acceptable only when all four
+of these hold — `CLIENT_API_KEY` is set, the limits are active, it runs as a
+single worker, and it sits behind TLS. TLS arrives in Step 05; until then, stay
+on loopback.
 
 ### When a query returns nothing
 

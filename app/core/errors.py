@@ -75,12 +75,17 @@ class AppError(Exception):
         status_code: int,
         message: str,
         details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.message = message
         self.details = details or {}
+        # Some refusals are only actionable WITH a header: a 429 without
+        # `Retry-After` tells a client to back off for an unknown amount of time,
+        # which in practice means retrying immediately. Added in chunk 8.10.
+        self.headers = headers
 
 
 def request_id_of(request: Request) -> str:
@@ -125,6 +130,7 @@ async def app_error_handler(request: Request, exc: Exception) -> Response:
         status_code=exc.status_code,
         message=exc.message,
         details=exc.details,
+        headers=exc.headers,
     )
 
 
