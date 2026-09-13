@@ -13,6 +13,478 @@ Newest entries first.
 
 ---
 
+## 2026-09-13 — Chunk 8.11 — Verifier v1: PRE-REGISTRATION (no code)
+
+> **Status: PRE-REGISTRATION (no code).** Written `2026-09-13T11:38:20Z` (UTC).
+>
+> **Line-citation convention.** Paths are repo-root-relative and cited by full path.
+> `app/api/v1/query.py` and `app/schemas/query.py` share a basename, so a bare
+> `query.py` never appears. No line numbers are used. Source citations are pinned
+> to repo HEAD `2849f67`, each file by its git blob. Vault citations are pinned to
+> vault HEAD `61f37ce`.
+>
+> | file                              | blob @ `2849f67` | sha256                                                             |
+> | --------------------------------- | ---------------- | ------------------------------------------------------------------ |
+> | `app/api/v1/query.py`             | `9410acf`        | `7c437293db011cb0b75eae26dcd02d7368efaa904783b8c42d2343ed760f7aba` |
+> | `app/schemas/query.py`            | `ec6bcc5`        | `eac11e5bc87ec326a60135a0999f08392b92f7aad33d253c00c6f40108adb562` |
+> | `app/services/generation.py`      | `b7e4a6e`        | `9a0f79d308f21abbfbab4d2c6383c44eb2720a480db96be07322679a2a19f588` |
+> | `app/agents/prompts/answer_v1.md` | `15434ab`        | `edcc1889cd94f19cdb6648c57479f66d376332db2d67675736e50dbe09a3c119` |
+> | `app/services/provenance.py`      | `f362ddd`        | `7c28e00f63b51fb2b1c437d706318349599a1a9aeaa9fd9ab8df11302bae8de9` |
+> | `app/core/logging.py`             | `3dc3eb1`        | —                                                                  |
+> | `docs/DECISIONS.md`               | `8925197`        | `f7093ef9…` (pre-8.11)                                             |
+
+**Decision, in one line.** Verifier v1 is designed here, on paper, before any of it
+is built. It is a threshold-free structural **promotion gate** from
+`ANSWER_UNVERIFIED` to a new, fourth verdict, `ANSWER_CITED` (D5). `ANSWER` stays
+unreachable and is reserved for a v2 groundedness signal. No `QueryResponse` field is
+added, removed or nulled. Every rule below is fixed before the model's real output has
+ever been seen.
+
+---
+
+### A. Identity and status
+
+- **8.11 (this entry):** paper only. It modifies **no** code, test, prompt or schema
+  file. No `.py` file, no `tests/` file, no `app/agents/prompts/` file and no
+  `app/schemas/` file is touched.
+- **8.12:** writes `app/agents/prompts/answer_v2.md`, which implements §G's
+  citation protocol, and runs one consented live smoke. It needs a valid Anthropic
+  key and fresh consent (8.9 §J item 4).
+- **8.13:** implements the Verifier and `tests/test_verifier.py` per §§D–M.
+
+### B. Premises
+
+| #   | premise                                                                                                                                                                                                                                                                                                                                                    | status     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| P1  | `FarFieldVerdict = Literal["ANSWER", "ABSTAIN_OUT_OF_DOMAIN", "ANSWER_UNVERIFIED"]` (`app/services/retrieval.py`). `ANSWER` is defined and currently unreachable.                                                                                                                                                                                          | OBSERVED   |
+| P2  | `QueryResponse` is `verdict`, `verdict_meaning`, `top_1_distance`, `answer: str \| None`, `citations: list[CitationOut]` (`app/schemas/query.py`).                                                                                                                                                                                                         | OBSERVED   |
+| P3  | `app/agents/prompts/answer_v1.md` specifies **no** citation format. Its only format rule is "Answer in plain text. Be direct and concise."                                                                                                                                                                                                                 | OBSERVED   |
+| P4  | The context header is `HEADER_TEMPLATE = "[doc_id={document_id} page={page} chars={char_start}-{char_end}]"` (`app/services/provenance.py`), emitted through `render_header`, one per included chunk. It is the only place that format is written.                                                                                                         | OBSERVED   |
+| P5  | Nothing parses the answer. Citations are `budgeted.included`, assembled without reading `generated.text` (`app/api/v1/query.py`).                                                                                                                                                                                                                          | OBSERVED   |
+| P6  | `budgeted` is bound only inside the non-`ABSTAIN_OUT_OF_DOMAIN` branch of `app/api/v1/query.py`, where `generate` returns. `result.hits` is in scope for the whole handler.                                                                                                                                                                                | OBSERVED   |
+| P7  | `render()` raises `DuplicateLocator` on any repeated `(document_id, char_start, char_end)` in `budgeted.included`, and it runs before `generate`. So by the time the Verifier runs, that tuple is unique within `included`.                                                                                                                                | OBSERVED   |
+| P8  | `generate` never returns empty text: empty or whitespace-only output raises `GenerationFailed` (`app/services/generation.py`). Every answer the Verifier sees is non-empty.                                                                                                                                                                                | OBSERVED   |
+| P9  | Neither `generated.text` nor any answer substring is passed to a logger in `app/api/v1/query.py` or `app/services/generation.py`.                                                                                                                                                                                                                          | OBSERVED   |
+| P10 | **Generation has never executed successfully.** The one consented smoke (8.9 §G) returned HTTP 401, so no model answer has ever been observed. Every fixture 8.13 builds encodes an **assumed** answer shape. A real transcript from 8.12's smoke supersedes those fixtures wherever they disagree.                                                        | UNVERIFIED |
+| P11 | **Whether the model complies with §G's echo protocol is unobserved and cannot be assumed.** Mitigation, pre-registered: non-compliance is not a defect the Verifier must tolerate. It is a **non-promotion**. A model that ignores the instruction never reaches `ANSWER_CITED`, and the response it gets is exactly today's `ANSWER_UNVERIFIED` response. | UNVERIFIED |
+| P12 | Every `document_id` in the frozen corpus contains no whitespace, `[` or `]`, so every header is expressible in §G's grammar. If this is false, the affected chunks can never be cited validly and fail closed (never promoted).                                                                                                                            | UNVERIFIED |
+
+### C. Purpose and scope boundary
+
+**Purpose.** Give an answer a verdict, `ANSWER_CITED`, that is checkable without a
+threshold. It says every citation marker in the answer is well-formed and
+byte-identical to a header rendered for a chunk the model was actually shown, and that
+there is at least one marker.
+
+It is **citation integrity**, not groundedness. A promoted answer can still say
+something its cited chunk does not support. That is exactly why it is not `ANSWER`
+(D5, §I).
+
+**Out of scope for 8.11 and 8.13:**
+
+- the Guardrail
+- `answer_v2.md` itself (8.12)
+- the live smoke (8.12)
+- the API Contract amendment
+- support-strength scoring of any kind
+
+### D. Placement
+
+- **Where.** In `app/api/v1/query.py`, inside the non-`ABSTAIN_OUT_OF_DOMAIN` branch,
+  immediately after `generate` returns, where `budgeted` is in scope (P6). It runs
+  before `QueryResponse` is built and serialized, and before any logging path sees
+  the answer.
+- **Never on the abstain path.** On `ABSTAIN_OUT_OF_DOMAIN` the model is never called
+  and the Verifier is never invoked (§M fixture 7).
+- **Ordering against `app/core/logging.py` redaction.**
+  - `redact`/`scrub` rewrite credential-shaped substrings (`_SECRET_ASSIGNMENT`,
+    `_SECRET_KEY`, `_DSN_PASSWORD`, `_BEARER_TOKEN`) in a log payload's copy of a
+    string.
+  - The Verifier must consume the raw `generated.text`, and must never consume any
+    value that has passed through `redact` or `scrub`. A scrubbed copy is a
+    different string: an answer containing e.g. `token=…` near a marker would be
+    rewritten, and verification of rewritten bytes would verify something that was
+    never returned.
+  - The Verifier therefore runs strictly before any code path that could hand the
+    answer to a logger. 8.13 adds no log call carrying the answer or marker text. If
+    it logs the outcome at all, it logs check identifiers (`V1`…`V4`) and counts only.
+  - The existing `"query judged"` log line runs before generation and records the
+    far-field verdict, not the promoted one. 8.13 does not move it.
+- **Crash-path logging.** `unhandled_exception_handler` (`app/core/errors.py`) logs
+  with `exc_info`. So an exception raised inside the Verifier must not interpolate
+  answer text or marker text into its message, or §J's 500 path becomes a logging
+  path for the answer.
+
+### E. Inputs and access boundary
+
+The Verifier receives exactly three inputs:
+
+1. the answer text (`generated.text`, raw)
+2. `budgeted.included`
+3. `result.hits`
+
+It performs no I/O, reads no settings, and receives no scores.
+
+**`result.hits` is received only to classify a failure:** it separates a marker that
+names a budget-excluded chunk (V3) from one that names nothing retrieved (V2).
+**`result.hits` may never satisfy a marker.** A marker found in hits and not in
+`included` is a failure, never a pass.
+
+### F. Verification basis — D1, reaffirmed
+
+**Threshold-free structural verification for v1.** Three reasons:
+
+1. **The recorded finding** (2026-09-02, "Chunk 7.3: perturbation stability is
+   INVERTED", Control arm G): "Reranker score does not track groundedness." No
+   score in this system is a licensed groundedness signal.
+2. **`chunk73-REPORT.md` §13.2** forbids tightening a rule after seeing which signals
+   it spared, i.e. post-hoc threshold fitting. With no successful generation ever
+   observed (P10), any threshold chosen now would be unfitted. Any threshold chosen
+   after 8.12's smoke would be fitted post hoc.
+3. **R3.** A v1 that contains no tuned number cannot be rescued by tuning one.
+
+**R3 — first canonical definition (D7).** Earlier citations of R3 were by use only:
+8.10 §F ("the tuning R3 forbids") and the chunk 8.5 pass report
+(`rag-reliability/passes/chunk85-REPORT.md`). No written definition existed before
+this entry. This is it:
+
+> **R3.** Stop on any failing check. Never tune a fixture, threshold, tolerance or
+> expected value into passing. Repairing a fixture so that it is internally honest is
+> allowed; repairing one so that an assertion holds is not.
+
+**Verifier v1 contains zero numeric thresholds.** The only numbers it handles are the
+integers inside markers, and a marker is compared as a whole string, never
+numerically.
+
+### G. Citation protocol — pre-registered (instructed by `answer_v2.md` in 8.12)
+
+**Marker = the provenance header, echoed.** The model is instructed to cite by copying
+the header of a passage it used, byte for byte, as it appears in its context. The
+header comes from `HEADER_TEMPLATE` in `app/services/provenance.py`, reused verbatim
+and not re-spelled:
+
+    [doc_id={document_id} page={page} chars={char_start}-{char_end}]
+
+This is deliberate. The model is asked to echo a string already present in its
+context, not to invent anything. The protocol requires no generative invention of ids,
+numbers or formats.
+
+**Candidate detection (what counts as a marker at all).**
+
+- Scan `generated.text` left to right for the literal, case-sensitive prefix
+  `[doc_id=`.
+- Each occurrence starts a **candidate** that extends to the first following `]`,
+  inclusive, or to end of text if there is none.
+- Scanning resumes after the candidate.
+- Text without that prefix is not a marker. So `[1]`, `(doc 3)` or a bare document
+  name are **zero markers**, not malformed markers.
+
+**Grammar (V1) — unchanged by D6.** A candidate is well-formed iff it fully matches:
+
+    \[doc_id=([^\s\[\]]+) page=(0|[1-9][0-9]*) chars=(0|[1-9][0-9]*)-(0|[1-9][0-9]*)\]
+
+- single ASCII spaces exactly as in the template
+- no leading zeros, no sign
+- no other whitespace inside the brackets
+
+The template renders Python `int`s, so every true echo satisfies this. A candidate that
+fails it (truncated, re-spaced, reordered, missing a field) is a V1 failure. The
+grammar still parses fields even though resolution no longer uses them. That is what
+keeps a **malformed** candidate (V1) distinguishable from a **well-formed but
+unresolvable** one (V2/V3).
+
+**Placement.** Markers may appear anywhere in the answer, conventionally inline after
+the statement they support. **No position is checked.** Checking position would mean
+deciding which statement a marker attaches to, which is sentence-level attachment
+(excluded, §H).
+
+**Repetition.** Repeated markers are permitted. Every occurrence is checked
+individually against V1–V3. A repeat satisfies nothing more than a single occurrence.
+
+**Resolution rule — D6, supersedes D2's three-tuple.** A well-formed marker
+**resolves iff it is byte-identical to a header rendered for a chunk in
+`budgeted.included`.** Resolution is full-string equality, and `page` is part of the
+key.
+
+- **Headers are built through the one format definition, never re-spelled.** Each
+  header is `render_header(document_id=…, page=…, char_start=…, char_end=…)` from
+  `app/services/provenance.py`, which is `HEADER_TEMPLATE.format(...)`. `render()`
+  produces the context headers through that same call over the same fields, so these
+  are byte-identical to the headers the model was shown (OBSERVED in
+  `render`'s body).
+- `I = {render_header(c) -> c.chunk_id for c in budgeted.included}`. It is a mapping,
+  and it is well-defined: the header contains `(document_id, char_start, char_end)`,
+  which is unique in `included` (P7), and a superset of a unique key is unique.
+- `H = {render_header(h) for h in result.hits}`. **Membership only, no mapping.**
+  `result.hits` carries no `DuplicateLocator` guard, so duplicates there are possible,
+  and in a set they are harmless.
+- For each well-formed marker `m`:
+  - **`m in I`** → resolved to `I[m]`
+  - **else `m in H`** → V3 failure
+  - **else** → V2 failure
+- The three outcomes are mutually exclusive, so V2 and V3 are reported distinctly.
+- **Why `page` is in the key.** The model is told to echo byte for byte. A marker with
+  a correct locator and a wrong page proves the model reassembled a header rather than
+  echoing one. That is the behaviour worth catching, and catching it costs no
+  threshold.
+
+**Answer bytes are not altered.** Markers stay in the returned `answer`; nothing is
+stripped or rewritten.
+
+### H. Decision rule — pre-registered
+
+Four deterministic checks. **Promotion to `ANSWER_CITED` requires all four.**
+
+| check | name          | holds iff                                                                                                                                                                         |
+| ----- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| V1    | Grammar       | every candidate (§G) fully matches the grammar                                                                                                                                    |
+| V2    | Resolvability | no well-formed marker is outside both `I` and `H`, i.e. none matches a header of any retrieved chunk                                                                              |
+| V3    | Scope         | no well-formed marker is in `H` but not `I`, i.e. none names a chunk the budget excluded. Reported distinctly from V2                                                             |
+| V4    | Non-empty     | the answer carries at least one candidate. By P8 the answer is always non-empty, so V4 reduces to "one or more markers". With V1–V3 holding, that means one or more valid markers |
+
+The Verifier evaluates and reports **all four**; it does not stop at the first failure.
+Its result is the set of failed check ids plus per-marker outcomes. Promotion is
+`failed == ∅`.
+
+**V5 was pre-registered and deleted before implementation (D3).** V5 ("an abstaining
+answer carries zero citations") needed an in-answer abstain to be structurally
+detectable, and it is not. `answer_v1.md`'s rule 3 abstain is a plain-text sentence,
+so detecting it is classification, and classification needs a threshold. Under D3, an
+in-answer abstain emits no marker, fails V4, and is never promoted. No classifier, no
+threshold.
+
+**Sentence-level claim attachment is NOT in v1.** Deciding what counts as a claim, and
+which marker covers it, needs a classifier, and a classifier needs a threshold (§F).
+
+### I. Promotion semantics — D5
+
+**`FarFieldVerdict` gains a fourth member, `ANSWER_CITED`.** In 8.13 it becomes
+`Literal["ANSWER", "ABSTAIN_OUT_OF_DOMAIN", "ANSWER_UNVERIFIED", "ANSWER_CITED"]`.
+
+- **Default verdict is `ANSWER_UNVERIFIED`**, exactly as today.
+- Any of V1–V4 failing leaves it there. `answer` and `citations` are returned
+  unchanged, as they are today.
+- Only all-four-pass sets `verdict = "ANSWER_CITED"`.
+- **`ANSWER` is not reachable and is not redefined.** `_VERDICT_MEANING["ANSWER"]` in
+  `app/api/v1/query.py` is **not** rewritten. `far_field_gate`'s docstring in
+  `app/services/retrieval.py` is **not** superseded. `ANSWER` stays reserved for a v2
+  groundedness signal.
+- **No field is added, removed or nulled.** `QueryResponse`'s declaration is unchanged:
+  `verdict: FarFieldVerdict` picks up the new member through the widened `Literal`.
+  `citations` stays `budgeted.included` in both outcomes. It is not narrowed to the
+  cited subset in v1, because narrowing would change what `citations` means.
+- **This is fail-closed.** The system never promotes without evidence. Absence of
+  markers, malformed markers, or unresolvable markers all yield the unpromoted, honest
+  default. No path promotes on an error, an empty scan, or an unrecognised input.
+
+**`_VERDICT_MEANING["ANSWER_CITED"]`, required content.** It must state both of these:
+
+- **what IS established:** every citation marker in the answer is well-formed and
+  byte-identical to a provenance header rendered for a passage the model was shown,
+  and at least one is present;
+- **what is NOT:** whether those passages support the answer is **NOT ESTABLISHED**.
+
+**GATE CONSTRAINT.** `far_field_gate` must **never** emit `ANSWER_CITED`. The `Literal`
+is widened; the function's behaviour is not. `far_field_gate` still returns only
+`ABSTAIN_OUT_OF_DOMAIN` or `ANSWER_UNVERIFIED`. `ANSWER_CITED` is set only in
+`app/api/v1/query.py`, after generation, by the Verifier's outcome.
+
+**Rationale (D5).** The 8.11 draft first had the Verifier promote to `ANSWER`. The
+tree contradicted that:
+
+- `_VERDICT_MEANING["ANSWER"]` reads "The retrieved context supports an answer."
+- `far_field_gate`'s docstring says reaching `ANSWER` "would require a committed
+  groundedness signal".
+- V1–V4 establish citation integrity, not support.
+
+Promoting to `ANSWER` would therefore have required rewriting `ANSWER` to mean what v1
+happens to deliver. **Redefining a verdict to fit what the implementation delivers is
+post-hoc definition fitting, the semantic form of what `chunk73-REPORT.md` §13.2
+forbids.** A new verdict names what v1 establishes and leaves the old one meaning what
+it always meant.
+
+### J. Crash versus failure
+
+An unexpected exception inside the Verifier is a **defect**, not an upstream fault and
+not a verification outcome.
+
+- It is not caught by the route. It propagates to `unhandled_exception_handler`
+  (`app/core/errors.py`) and leaves as **500 `INTERNAL_ERROR`**.
+- **Never** a silent non-promotion (that would hide a bug behind the honest default).
+- **Never** a pass.
+- **Never** `UPSTREAM_UNAVAILABLE` (nothing upstream failed).
+- The exception message must not carry answer or marker text (§D).
+
+This asymmetry is deliberate and pre-registered: a V1–V4 failure is the Verifier
+working; a raise is the Verifier broken.
+
+### K. Cost and latency
+
+- No network call, no paid call, no model call, no embedding.
+- It does not charge the 200/day counter. `guard_query` has already charged the
+  request before `retrieve()`, and the Verifier adds nothing.
+- **Latency, predicted, not measured:** one linear scan of an answer of at most
+  `llm_max_tokens = 1024` output tokens, plus set/dict construction over at most
+  `top_k = 5` included chunks and hits. **Sub-millisecond class**, negligible against
+  the generation call.
+
+### L. Deferred to v2, named
+
+| deferred                        | why not v1                                                  |
+| ------------------------------- | ----------------------------------------------------------- |
+| Support-strength scoring        | needs a threshold                                           |
+| NLI entailment                  | needs a threshold on entailment probability, and a model    |
+| Model-as-judge                  | a second paid call, and a threshold on its verdict or score |
+| Sentence-level claim attachment | needs a claim classifier, hence a threshold                 |
+| Multi-hop claim decomposition   | a second paid call, and thresholds on the decomposition     |
+
+Each one introduces either a threshold or a second paid call. **Neither is acceptable
+in v1.** Whichever of these first licenses groundedness is what may make `ANSWER`
+reachable (D5).
+
+### M. Test plan — pre-registered, implemented in 8.13, NOT written here
+
+- File: `tests/test_verifier.py`, run as `python -m tests.test_verifier`.
+- pytest is not installed; plain `assert`s.
+- $0 and offline: no network, `FakeLLMClient` where a route is exercised.
+
+| #   | fixture                                                                                                | expected                                                                                               |
+| --- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| 1   | every marker resolves into `included`                                                                  | PROMOTE → `ANSWER_CITED`                                                                               |
+| 2   | a well-formed marker resolving nowhere                                                                 | NO PROMOTE (V2)                                                                                        |
+| 3   | a well-formed marker resolving into `result.hits` but not `included`                                   | NO PROMOTE (V3, and not V2)                                                                            |
+| 4   | non-empty answer, zero markers                                                                         | NO PROMOTE (V4)                                                                                        |
+| 5   | malformed marker (`[doc_id=` prefix, grammar violated)                                                 | NO PROMOTE (V1)                                                                                        |
+| 6   | in-answer plain-text abstain, zero markers                                                             | NO PROMOTE (V4)                                                                                        |
+| 7   | `ABSTAIN_OUT_OF_DOMAIN`                                                                                | Verifier **not invoked at all** (call-count assertion, not "no exception")                             |
+| 8   | Verifier raises                                                                                        | HTTP 500 `INTERNAL_ERROR`; verdict not `ANSWER_CITED`                                                  |
+| 9   | a marker with a correct `(document_id, char_start, char_end)` for an included chunk and a wrong `page` | NO PROMOTE; asserted as a **resolution** failure (V2), and asserted **not** a grammar failure (not V1) |
+
+**Fixture 3 needs a retrieval where `plan_context` excludes a hit**, so
+`len(budgeted.included) < len(result.hits)`. That closes the path carried open since
+8.9 §J item 6 and 8.10 §I item 9, which has no test today.
+
+**Fixture 9 pins D6.** Under D2's three-tuple the same marker would have resolved.
+
+Fixtures 1–6 and 9 encode the assumed answer shape (P10) and are superseded by 8.12's
+real transcript wherever they disagree. Superseding means recording the disagreement in
+a DECISIONS entry. It never means editing an expected value to make a fixture pass (R3).
+
+### N. Gate
+
+**No `.py` file is touched in 8.11, so no gate run is made in 8.11** (D4).
+
+**FINDING — the gate's capture-and-combine recipe is NOT ESTABLISHED in DECISIONS.**
+
+- 8.9 §E records the four commands and nothing else:
+  1. `python -m app.services.evaluation`
+  2. `python -m app.cli evaluate`
+  3. `python -m app.services.retrieval`
+  4. `python -m tests.test_far_field_gate`
+- 8.9's own hash `5d6c0d4804d1969c5df37244c5df6a0a9dabfcf838824584ae4bb7146f7ac4e8` is
+  over `/tmp/c89/gate-*.txt`, with no recorded method.
+- 8.10 §F's `7fc467cf073427d518fc8de745f21884c4c3590820e9872e53f2acbce8c333a8` is also
+  recorded without its method.
+- The two values differ, and no entry says whether that is a method difference or an
+  output difference.
+
+**Precondition of 8.12, which does change code** (`app/api/v1/query.py` loads the
+prompt by name). Before 8.12's first edit, a DECISIONS entry must record the exact
+recipe:
+
+- stream selection (stdout only, or stdout+stderr)
+- command order
+- separators between command outputs
+- whether exit codes are included
+- working directory and environment
+- the exact hashing command
+
+It must also record which of the two existing hashes that recipe reproduces. Until
+then, "the gate reproduces" is not a checkable claim.
+
+**Precondition of 8.13 (D5) — `FarFieldVerdict` consumer inventory.** Before widening
+`FarFieldVerdict`, 8.13 must inventory **every** consumer of `FarFieldVerdict` in `app/`,
+`scripts/` and `tests/`, not only the four gate commands. For each consumer it records
+what happens when the type gains `ANSWER_CITED`.
+
+- **Gate hazard.** If any of the four gate commands prints or enumerates
+  `FarFieldVerdict`'s members, widening the `Literal` moves the gate. The missing recipe
+  then becomes **blocking** for 8.13 as well, not merely owed.
+- **Runtime hazard, off the gate.** `_VERDICT_MEANING` in `app/api/v1/query.py` is a
+  `dict[FarFieldVerdict, str]` indexed by verdict. mypy does not check that a dict
+  literal covers every member of a `Literal` key type. So a widened `Literal` with no
+  `"ANSWER_CITED"` key passes `mypy --strict` and raises `KeyError` at runtime on the
+  first promoted answer. That failure reaches production without touching the gate,
+  so a reproducing gate is no evidence against it. 8.13 must add the key, and a test
+  must exercise the promoted path through the route (§M fixture 1 at route level).
+- Preliminary observation (read-only, not the 8.13 verification): the only files naming
+  `FarFieldVerdict` are `app/services/retrieval.py`, `app/schemas/query.py` and
+  `app/api/v1/query.py`.
+  `tests/test_far_field_gate.py` prints `sorted(verdicts)`, where `verdicts` is the set
+  `far_field_gate` actually **returned** for five distances. It does not print the type's
+  members. Under the §I gate constraint that output does not change. No
+  `get_args`/`__args__` use of `FarFieldVerdict` exists in `app/`, `scripts/` or
+  `tests/`.
+- **Placement constraint.** Any test that asserts the §I gate constraint
+  (`far_field_gate` never returns `ANSWER_CITED`) must not be added to
+  `tests/test_far_field_gate.py`. That file is gate command 4, and editing it changes the
+  gate's source and possibly its output. The assertion belongs in
+  `tests/test_verifier.py`.
+
+### O. Corrections to prior entries
+
+Recorded here as notes. Prior entries are superseded, never rewritten.
+
+1. **Four contract deviations, not three.** The 8.11 brief said 8.10 recorded three.
+   8.10 §C lists four, the fourth being that `POST /api/v1/query` is absent from the
+   API Contract entirely. 8.13 adds a verdict value (note 3) to an endpoint with no
+   Contract entry: nothing about it is documented today, and nothing becomes less
+   documented. 8.10 §C's count stays at four.
+
+   **D8 — the enum widening is not classified as a deviation at all.** A deviation is
+   a divergence from Contract text. Deviation 4 states there is no Contract text for
+   `POST /api/v1/query`, so there is nothing to diverge from. If the endpoint is wholly
+   absent, then `answer`, `citations`, `top_1_distance`, `verdict` and every response
+   header are equally undocumented. The verdict enum is not newly undocumented; it was
+   never documented. A surface list over an absent endpoint is unbounded and cannot be
+   maintained honestly. Extending 8.10 §C's numbered list, whether by adding,
+   renumbering or attaching surfaces, would also rewrite a prior entry by other means.
+
+2. **8.10's status line is stale.** It reads "BUILT AND VERIFIED, STAGED, NOT
+   COMMITTED", but repo HEAD `2849f67` is the 8.10 commit ("feat(security): require a
+   client credential, rate limit and cap the query route (chunk 8.10)").
+3. **The Verifier adds a new state.** The 8.11 brief claimed it adds no new state. It
+   does: `ANSWER_CITED` (D5). The brief's claim was wrong, and the tree corrected it:
+   `ANSWER`'s recorded meaning could not be reached by structural checks without being
+   redefined.
+
+### P. Open items carried forward
+
+1. **No concurrency cap.** 20/minute bounds arrivals, not simultaneity (8.10 §I item 2).
+2. **In-process limiter state.** N workers serve N× the limit (8.10 §I item 3).
+3. **`--workers 1` is enforced by a README line, not by code** (8.10 §I item 3).
+4. **CORS is absent**; the service is same-origin-only (8.10 §I item 7).
+5. **`citations[].id` / `citations[].score` unresolved** (8.8 §O item 1).
+6. **The `llm_max_tokens > answer_reserve` boot-failure branch has never fired**, in a
+   test or otherwise (8.9 §J item 5).
+7. **Offline scripts require `CLIENT_API_KEY` to boot**, because `Settings` is global
+   (8.10 §I item 1).
+8. **The `_manifest` private cross-script import is present:** `scripts/chunk7_scores.py`
+   imports `_manifest` from `scripts/chunk5_benchmark.py`. Its effect on Guardrail code
+   is UNVERIFIED.
+9. **CLOSED by D5 — `ANSWER`'s meaning versus v1's licence.** Resolved by adding
+   `ANSWER_CITED` rather than redefining `ANSWER` (§I).
+10. **NEW — the gate recipe** (§N). Blocks 8.12, and blocks 8.13 too if the §N
+    consumer inventory finds a gate command that enumerates `FarFieldVerdict`.
+11. **CLOSED by D6 — `page` not part of resolution.** Resolution is now full-string
+    equality against rendered headers, `page` included (§G).
+12. **NEW — the endpoint's ENTIRE response surface is uncontracted** (§O note 1, D8).
+    `POST /api/v1/query` has no Contract entry. When reconciliation happens, it must
+    enumerate the response surface from source at that time, not by replaying an
+    incremental surface list. Unscheduled.
+
+---
+
 ## 2026-09-11 — Chunk 8.10 — client credential, rate limit, daily cap
 
 > **Line-citation convention.** Every path is repo-root-relative. Source citations are to the
