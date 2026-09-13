@@ -13,6 +13,250 @@ Newest entries first.
 
 ---
 
+## 2026-09-13 — Chunk 8.12 Phase A — gate capture recipe PRE-REGISTERED and RUN; canonical gate hash `b17eec0c…`; legacy hashes METHOD NOT ESTABLISHED
+
+> **Status: RECORDED. No `.py` file, test, prompt or schema file is modified by this chunk.**
+> Phase B (`answer_v2.md` and the consented smoke) is out of scope, and
+> `app/agents/prompts/` is untouched.
+>
+> **Citation convention.** Artifacts are cited by sha256, never by line number. Source
+> citations are to repo HEAD `4635867`. `git diff --stat 2849f67 4635867` touches only
+> `docs/DECISIONS.md`, so every gate source file is byte-identical to the 8.10 tree. Vault
+> citations are to vault HEAD `5d8338c`. `app/api/v1/query.py` and `app/schemas/query.py`
+> share a basename, so both are always cited in full.
+>
+> **Durable copies.** The recipe survives `/tmp` in the vault, in `rag-reliability/passes/`:
+>
+> | file                                          | sha256                                                             |
+> | --------------------------------------------- | ------------------------------------------------------------------ |
+> | `chunk812a-recipe_prereg.md` (registration 3) | `0da873544cec3e9a0e893f79a38987b02a1443056504b59d8ac4844893229cf5` |
+> | `chunk812a-run_gate.sh`                       | `4a606b7746ee6b4bab4ff7d446093736d917ceac932ec172557e1615a758bfaa` |
+> | `chunk812a-REPORT.md`                         | the pass report                                                    |
+
+**Decision, in one line.** The gate now has a written, pre-registered capture recipe. Run
+twice, it reproduces all twelve figures and the class-1 miss set. Its combined hash,
+`b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a`, is the canonical gate
+hash from here on. `5d6c0d48…` (8.9) and `7fc467cf…` (8.10) are METHOD NOT ESTABLISHED and
+superseded.
+
+---
+
+### A. Why
+
+8.11 §N recorded that no DECISIONS entry records how the gate's outputs are captured,
+combined or hashed. 8.9 §E lists the four commands and nothing else. `5d6c0d48…` and
+`7fc467cf…` were each stated without a method, and they differ from each other. Until a
+recipe exists, "the gate reproduces" is not a checkable claim. It was a precondition of
+8.12, which changes code (8.11 open item 10).
+
+### B. Registrations
+
+The recipe was fixed on paper before any run, and amended twice. Each amendment was a new
+registration, never an edit to a run.
+
+| #   | registered (UTC)       | prereg sha256                                                      | script sha256                                                      | run       | status          |
+| --- | ---------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ | --------- | --------------- |
+| 1   | `2026-09-13T18:15:45Z` | `9b0bcd1b096e65284c109b31db7faa7fb2d7ed8bf603db8892fc37b0fbd20072` | `b78e8f1d4cf68dc04b517dfa28d64216eec3dabe2289559d6a09628b14f3ba74` | never run | SUPERSEDED by 2 |
+| 2   | `2026-09-13T18:18:48Z` | `7df9bc9bb79793c59561376fecc086c1ef168c72fd79da80a4710cf860a6cb0f` | `88b83486c3b253d2beb93ff5db5f794832d57857a66fb2e9b3971797e268fd65` | `run1`    | SUPERSEDED by 3 |
+| 3   | `2026-09-13T19:01:50Z` | `0da873544cec3e9a0e893f79a38987b02a1443056504b59d8ac4844893229cf5` | `4a606b7746ee6b4bab4ff7d446093736d917ceac932ec172557e1615a758bfaa` | `run2`    | **CURRENT**     |
+
+**Script v1 was overwritten by v2.** Only its hash survives. It was never run, so no
+evidence was lost.
+
+- **Amendment 1 (1 → 2).**
+  - The framing lines no longer carry command text. Embedding the command string would
+    make the canonical hash sensitive to how commands are spelled, not only to what they
+    output: a module rename would move the hash with every figure unchanged. The mapping
+    from slot to command lives in the prereg and in the `cmdN.stdout` filenames.
+  - It adds a hard environment assertion, evidence only and never hashed. The earlier
+    "none of `Settings`' 22 fields is exported" check was by name only, and an exported
+    alias would slip past it.
+- **Amendment 2 (2 → 3).** `PYTHONOPTIMIZE` is pinned to empty, and asserted.
+  - `_PRE_RERANK_DIGEST` is verified only by an in-process `assert`, so that verification
+    silently depends on asserts being active.
+  - In `run1` that held only because `env -i` left `PYTHONOPTIMIZE` unset.
+  - An unnamed dependency is an unpinned one: on a host exporting `PYTHONOPTIMIZE=1` the
+    assert is stripped and the command still exits 0, a green exit proving nothing ran.
+  - It is named rather than left to omission, and hard assertion (c) checks
+    `sys.flags.optimize == 0` inside the uv-run Python process.
+- **Disclosure.** Between registrations 2 and 3, the 8.9 and 8.10 pass reports were read
+  for §G. They record no capture method. Amendment 2 touches environment pinning only, not
+  framing, streams or hashing.
+
+### C. The recipe (registration 3), in summary
+
+The full text is in `chunk812a-recipe_prereg.md`; the executable form is
+`chunk812a-run_gate.sh`.
+
+- **Streams: stdout only.**
+  - stdout is the result channel by design: `configure_cli_logging` in
+    `app/core/logging.py` "reserves stdout for command results".
+  - stderr is non-deterministic by construction. `app.cli` logs through `JsonFormatter`,
+    which stamps each record with `datetime.now(UTC)`.
+  - stderr is captured per command for diagnosis and never hashed.
+- **Commands:** the four from 8.9 §E, verbatim, in 8.9 §E order, each as its own process
+  with stdin from `/dev/null`.
+- **Framing:** `===== gate N/4 =====` before each command's raw stdout, and
+  `===== end N/4: exit=<rc> =====` after it. Both are written with `printf '%s\n'`; stdout is
+  appended with `cat`, with no newline added or stripped.
+- **Exit codes:** inside the hashed bytes. Any non-zero exit is a STOP (R3).
+- **Working directory:** the repo root. `Settings` reads `.env` relative to it, and
+  `format_report` prints the relative golden-set path.
+- **Environment:** `env -i` plus a single `ENV_ALLOW` array, shared by the assertions and
+  every command:
+  - `HOME=/home/asaad`
+  - `PATH=/home/asaad/.local/bin:/usr/local/bin:/usr/bin:/bin`
+  - `LC_ALL=C.UTF-8`, `LANG=C.UTF-8`, `PYTHONIOENCODING=utf-8`
+  - `PYTHONHASHSEED=0`, `PYTHONOPTIMIZE=` (empty)
+  - `TZ=UTC`, `TERM=dumb`, `COLUMNS=80`, `NO_COLOR=1`
+  - `HF_HUB_OFFLINE=1`, `UV_NO_SYNC=1`
+  - Commands run as `/home/asaad/.local/bin/uv run --no-sync <command>`.
+- **Hash:** `sha256sum "$OUT/gate-combined.txt" | cut -d' ' -f1`.
+
+**Where "exactly the allowlist" holds.**
+
+- **(a) Hard, at the `env -i` handoff.** The names in `env -i "${ENV_ALLOW[@]}" /usr/bin/env`
+  must equal the allowlist, or the script exits 92 without running the gate.
+- **(b) Evidence only, inside Python.** `uv run` injects its own variables into the Python
+  process by design. OBSERVED in both runs: `UV`, `UV_RUN_RECURSION_DEPTH`, `VIRTUAL_ENV`.
+  So the equality cannot hold there, and the recipe does not claim it. This was found in the
+  tree while writing the assertion; it is not a relaxation chosen at run time.
+- **(c) Hard, inside Python.** `sys.flags.optimize` must be `0`, or the script exits 93.
+
+### D. Prediction versus outcome
+
+| prediction                                              | registered                        | outcome                                                                                             |
+| ------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| The recipe will NOT reproduce `7fc467cf…` (~95%)        | 1, carried unchanged into 2 and 3 | **HELD.** `run1` = `run2` = `b17eec0c…` ≠ `7fc467cf…`                                               |
+| All twelve figures and the miss set reproduce unchanged | 1                                 | **HELD** (§E)                                                                                       |
+| `run2`'s hash equals `run1`'s `b17eec0c…`               | 3, before `run2`                  | **HELD.** All four `cmdN.stdout` and `gate-combined.txt` are byte-identical across the runs (`cmp`) |
+
+### E. Verification: eleven by reading, one by assertion (D10a)
+
+**Runs.**
+
+- `run1`: `2026-09-13T18:19:34Z`–`18:19:40Z`, registration 2.
+- `run2`: `2026-09-13T19:02:40Z`–`19:02:48Z`, registration 3.
+- Both: all four exits `0`, every `cmdN.stderr` 0 bytes, all hard assertions PASSED.
+- `run2/env-assert.txt` sha256 `c2f976533b20543d907d2ce1a078f1ea76fcb27c2a9084266d10366f7b7ed0fb`.
+
+The eleven figures below were **read out of** `run2/cmd2.stdout` and `run2/cmd4.stdout`
+(hashes at the end of this section), not inferred from a hash:
+
+| figure                                | expected                                                           | observed                            | result                                                    |
+| ------------------------------------- | ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------------------------- |
+| lexical recall@5 / @10 / @30 / MRR@10 | 0.233 / 0.400 / 0.567 / 0.142                                      | 0.233 / 0.400 / 0.567 / 0.142       | OBSERVED-MATCH                                            |
+| vector recall@5 / @10 / @30 / MRR@10  | 0.833 / 0.900 / 1.000 / 0.700                                      | 0.833 / 0.900 / 1.000 / 0.700       | OBSERVED-MATCH                                            |
+| hybrid recall@5 / @10 / @30 / MRR@10  | 0.667 / 0.867 / 0.967 / 0.445                                      | 0.667 / 0.867 / 0.967 / 0.445       | OBSERVED-MATCH                                            |
+| class-1 miss ood08                    | 1.4131                                                             | `ood08 1.4131 -> ANSWER_UNVERIFIED` | OBSERVED-MATCH                                            |
+| class-1 miss ood01                    | 1.4898                                                             | `ood01 1.4898 -> ANSWER_UNVERIFIED` | OBSERVED-MATCH                                            |
+| class-1 miss ood10                    | 1.4906                                                             | `ood10 1.4906 -> ANSWER_UNVERIFIED` | OBSERVED-MATCH                                            |
+| `_PRE_RERANK_DIGEST`                  | `03bc2840d2affc458d3adffdfcc613c0839b6ab7d14b2207439d46d1456d5e1f` | **not printed**                     | **MATCH BY ASSERTION; value NOT ESTABLISHED from output** |
+
+(The recall/MRR rows are twelve numbers. "The twelve figures" are those twelve; the miss set
+and the digest are verified alongside them.)
+
+**D10a — the digest is a different kind of evidence, and is recorded as such.**
+
+- `_assert_noop_matches_pre_rerank_baseline` (`app/services/retrieval.py`) does
+  `assert digest == _PRE_RERANK_DIGEST`. The assert is reached unconditionally inside
+  `_demo()`'s `run_live()`.
+- The `ok: … NoOp path matching the pinned pre-rerank baseline (lineage: 5db0925) …` line
+  prints only after it, and the command exits `0`.
+- The computed digest value is never written to stdout, so it is **NOT ESTABLISHED from
+  output**.
+- **Load-bearing premise: asserts were active, because `PYTHONOPTIMIZE` is pinned empty and
+  `sys.flags.optimize == 0` was asserted** (§B amendment 2, §C (c)).
+- Without that premise, a green exit here would prove nothing. The eleven read figures do
+  not depend on it.
+
+Per-command stdout hashes from `run2`, for diagnosis and not canonical:
+
+| file          | sha256                                                             |
+| ------------- | ------------------------------------------------------------------ |
+| `cmd1.stdout` | `41cffc9694af1aaffd6c39a990d66c40185753921d6bf9738b6d77cb2fef84c4` |
+| `cmd2.stdout` | `0ea625f2f2ea0d86532068fc55e5c58f1f7a571834dd4587363bdf7821c696b7` |
+| `cmd3.stdout` | `effdc5618375039042a85ca46889928b154f8fa4a486294bef90fe717646594b` |
+| `cmd4.stdout` | `85a0a6e36f63bb7d793d894c0ce2a30c88aedb8fecd5df973be2b72186931436` |
+
+### F. Canonical gate hash
+
+**`b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a`**, produced by `run2`
+under registration 3. It is canonical from this entry forward.
+
+`run1` produced the same value under registration 2. That value is recorded as
+**superseded by `run2`**: identical bytes, but produced under a registration that left
+`PYTHONOPTIMIZE` unnamed. **Any future claim that "the gate reproduces" must name this
+recipe and this hash.**
+
+### G. A2 — capped archaeology on `7fc467cf…`: no match
+
+Three variants were declared in writing **before** any was computed: `a2_declared.md`,
+sha256 `9d27c6471a3e8e47ccd510e9175461c927143fa117415ec795e02073ad3316da`, declared
+`2026-09-13T18:21:03Z`. Each recombined `run1`'s captured stdout offline; the gate was not
+re-run. Results are in `a2_results.txt`, sha256
+`e9325ab2d28cfa52d7c5b59be824f7c32a7eaa418eaede5681775017ebf9d782`.
+
+| variant | construction                                                 | sha256                                                             | `7fc467cf…` | `5d6c0d48…` |
+| ------- | ------------------------------------------------------------ | ------------------------------------------------------------------ | ----------- | ----------- |
+| V1      | bare concatenation of `cmd1..4.stdout`                       | `58e29b74f2f6e2420d91c39e7aee6e365d666554d22395a5c385e3a7d34acbe4` | no          | no          |
+| V2      | `=== python -m <module> ===` / stdout / `exit=0` per command | `d243beeb6d5c75a76675d93730756cd95325745ada4eaaff151c09962a524c28` | no          | no          |
+| V3      | each stdout plus one extra `\n`                              | `3af2458b3107d33e418c23d948f8dccdae13238b5cdd4d6e50a18693ed1a32ce` | no          | no          |
+
+Stopped after the third, as capped.
+
+- **Records consulted.** No capture method is recorded anywhere:
+  - 8.10 §F and `chunk810b-REPORT.md` state `7fc467cf…` only.
+  - `chunk89-REPORT.md` names `/tmp/c89/gate-before.txt` and a `.venv/bin/python` runner,
+    with no capture.
+- **Recorded limit.** Under `env -i`, every `cmdN.stderr` was 0 bytes. A legacy capture that
+  merged stderr into the hashed file, under a different environment, **cannot be tested from
+  an empty-stderr capture at all**. Three stdout-only variants are not a search of that space.
+- **Pre-stated limit on any match.** A match would have shown only that the bytes were
+  stable under one guessed capture. It would NOT have been evidence that the gate held across
+  8.9 and 8.10, and it would not have licensed those chunks retroactively.
+
+### H. Legacy hashes: METHOD NOT ESTABLISHED, superseded
+
+- `5d6c0d4804d1969c5df37244c5df6a0a9dabfcf838824584ae4bb7146f7ac4e8` (8.9 §E): **METHOD NOT
+  ESTABLISHED**, superseded by `b17eec0c…`.
+- `7fc467cf073427d518fc8de745f21884c4c3590820e9872e53f2acbce8c333a8` (8.10 §F): **METHOD NOT
+  ESTABLISHED**, superseded by `b17eec0c…`.
+
+8.9 and 8.10 are not edited. Their "reproduced byte-identically" claims stand as written.
+From this entry forward, both hashes are read as values whose capture cannot be reconstructed.
+The twelve figures those chunks quoted are the same twelve read in §E.
+
+### I. The §N verdict-enumeration precondition for 8.13: NOT affected
+
+`run2/cmd4.stdout` prints
+`verdicts reachable from far_field_gate(): ['ABSTAIN_OUT_OF_DOMAIN', 'ANSWER_UNVERIFIED']`.
+That is the set `far_field_gate` actually **returned** for five distances, not
+`FarFieldVerdict`'s members. Under 8.11 §I's gate constraint (`far_field_gate` never emits
+`ANSWER_CITED`), that output does not change when the `Literal` is widened.
+
+This is still the preliminary, read-only observation. **8.13 still owes the full consumer
+inventory** of `FarFieldVerdict` across `app/`, `scripts/` and `tests/`. That includes the
+`_VERDICT_MEANING` `KeyError` hazard, which `mypy --strict` does not catch.
+
+### J. Open items
+
+Numbering continues 8.11 §P. Items 1–9, 11 and 12 are unchanged and not restated.
+
+10. **CLOSED by this entry — the gate recipe.** Recorded (§§B–C), run twice (§E), canonical
+    hash fixed (§F). The 8.12 precondition is met. The 8.13 contingency (8.11 §N) does not
+    fire: no gate command enumerates `FarFieldVerdict`'s members (§I, preliminary).
+11. **NEW (D10b) — the retrieval demo prints no computed digest.** `_PRE_RERANK_DIGEST` is
+    verified only by assertion (§E). Fixing it is a `.py` change for a later chunk.
+    **It WILL move the canonical gate hash**, because `cmd3.stdout` gains bytes. That change
+    therefore requires a void-convention entry that supersedes `b17eec0c…` under a
+    re-registered recipe. It is not a rollback, and not a silent hash update.
+12. **Deferred, unscheduled — random `PYTHONHASHSEED`.** One gate run under a random seed,
+    compared against the canonical twelve figures, would establish whether the gate has any
+    hash-order dependence. The pinned `PYTHONHASHSEED=0` (§C) would hide one. Not run.
+
+---
+
 ## 2026-09-13 — Chunk 8.11 — Verifier v1: PRE-REGISTRATION (no code)
 
 > **Status: PRE-REGISTRATION (no code).** Written `2026-09-13T11:38:20Z` (UTC).
