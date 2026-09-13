@@ -14,6 +14,7 @@ from app.core.config import Settings, SettingsError, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
+from app.core.security import RateLimiter, key_digest
 from app.db.session import create_engine, create_session_factory, ping
 from app.documents.status import assert_status_enum_matches_db
 from app.services.context_budget import ContextBudget, TiktokenCounter
@@ -30,6 +31,25 @@ STARTUP_PROBE_TIMEOUT_SECONDS = 5.0
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
+
+    # The credential is reduced to a digest HERE and the SecretStr is not kept:
+    # nothing downstream needs the raw key, and a value that does not exist in
+    # `app.state` cannot be logged out of it by accident.
+    app.state.client_key_digest = key_digest(settings.client_api_key.get_secret_value())
+
+    # One limiter for the process. `--workers 1` is not a suggestion: each worker
+    # would get its OWN counters, so N workers serve N times the limit and N
+    # times the daily spend. Said in the log rather than left in a docstring,
+    # because the person who needs to know is reading logs, not source.
+    app.state.limiter = RateLimiter(settings.rate_limit_per_minute, settings.daily_request_cap)
+    logger.info(
+        "query limits active (per process — run a single worker)",
+        extra={
+            "rate_limit_per_minute": settings.rate_limit_per_minute,
+            "daily_request_cap": settings.daily_request_cap,
+            "scope": "global, in-process",
+        },
+    )
 
     app.state.engine = create_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)

@@ -48,11 +48,25 @@ _STANDARD_ATTRS = frozenset(
 
 _REDACTED = "***"
 
-# key=value / "key": "value" for anything that smells like a credential
+# key=value / "key": "value" for anything that smells like a credential.
+#
+# The leading `\w*` is not decoration: a `\b` there fails on `client_api_key=...`,
+# because the boundary between `_` and `a` does not exist — both are word
+# characters — so the setting name added in chunk 8.10 would have logged its value
+# in the clear. Matching a prefixed identifier redacts a few innocent keys too
+# (`monkey_token`), which is the correct direction to be wrong in.
+_SECRET_NAME = r"\w*(?:password|passwd|secret|token|api[_-]?key|authorization|dsn)"
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|dsn)\b"
+    r"(?i)(" + _SECRET_NAME + r")\b"
     r"(\s*[=:]\s*)"
     r"(\"?)([^\"\s,;}]+)\3"
+)
+# The same names, anchored, for matching a dict KEY rather than text. `scrub`
+# walks a log payload key by key, so a credential passed as
+# `extra={"client_api_key": ...}` never reaches `redact` as `key=value` text and
+# the assignment rule above cannot see it.
+_SECRET_KEY = re.compile(
+    r"(?i)^[\w-]*(?:password|passwd|secret|token|api[_-]?key|authorization|dsn)[\w-]*$"
 )
 # postgresql+asyncpg://user:password@host/db
 _DSN_PASSWORD = re.compile(r"(?i)(://[^:/@\s]+:)([^@\s]+)(@)")
@@ -79,11 +93,19 @@ def scrub(value: Any) -> Any:
 
     Redacting the serialized JSON instead would be wrong: json.dumps escapes the
     quotes in `api_key="secret"`, and the escaped form slips past the regex.
+
+    A credential-shaped KEY redacts its whole value, whatever that value's type.
+    Text redaction cannot help there: `extra={"client_api_key": "hunter2"}`
+    reaches this function as a bare string with no `key=` around it, so the only
+    thing that identifies it as a secret is the key it arrived under.
     """
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, dict):
-        return {str(key): scrub(item) for key, item in value.items()}
+        return {
+            str(key): _REDACTED if _SECRET_KEY.match(str(key)) else scrub(item)
+            for key, item in value.items()
+        }
     if isinstance(value, list | tuple):
         return [scrub(item) for item in value]
     if value is None or isinstance(value, bool | int | float):
