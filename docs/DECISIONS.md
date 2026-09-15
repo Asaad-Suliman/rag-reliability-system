@@ -13,6 +13,45 @@ Newest entries first.
 
 ---
 
+## 2026-09-15 — Chunk 8.13 Phase A — `FarFieldVerdict` consumer inventory: ENUMERATES is zero across 115 sites; exactly one runtime hazard (`_VERDICT_MEANING`, conditional); zero gate hazards
+
+> **Status: RECORDED. No repository file is modified by this chunk.** No `.py`, test, prompt or schema file changed. No gate was run, and no network, paid or Anthropic call was made.
+>
+> **Citation convention.** Artifacts are cited by sha256. Source citations are to repo HEAD `792b980b82099cb5e27d042490ffb1eba44b736b`, which is unchanged throughout. Vault citations are to the commits named below. `app/api/v1/query.py` and `app/schemas/query.py` share a basename, so both are always cited in full.
+>
+> **Ledger order.** Phase A ran while 8.12 Phase B is still OPEN and BLOCKED on a valid Anthropic key. So this entry sits above a chunk that is numbered lower but not finished. That order is deliberate. Phase A needed no key, no network and no paid call, and waiting for 8.12 Phase B would have held back a precondition that 8.13 Phase B needs regardless.
+
+**Method.** The prereg is registered at sha256 `7091e37d061d8d217029891c7dd900933fde58c872f978e530acbb9a4bbc3cb4` (vault commit `9302eb0`). Amendment 1 is registered at sha256 `5f6fbfd5f47a50d408eddcb674fa4f65b3aa8d0d39db3914e2546f2bb8e7501a`; its on-disk sha256 is `2c695568f51b63ca4d618d6928e4f8071061176d243771803e67386745512d79` (vault commit `8cfa919`). Amendment 1 replaced §E.4, which as sealed was not runnable as text, and added §H.3 indirection. It was written while zero search results existed. The inventory, sha256 `83844124ef5fb5fb63b40fdd68580c6fbf755d18a9a205d2379f39f7824c366e`, records Step 1, addenda 1b, 2c and 2d, Step 2, Step 3 and Step 3b.
+
+**Result.** Category 5 ENUMERATES is zero across all 115 sites. This is complete under this method, not complete. Three blind spots are known: a name bound to the type rather than to its members; a value in motion through a bare local, as at `app/services/retrieval.py:242`; and dynamic access.
+
+**Hazards.**
+
+- **H-A YES: exactly one.** At `app/api/v1/query.py:134`, `_VERDICT_MEANING[decision.verdict]` raises `KeyError` once the Literal is widened, and it passes `mypy --strict`. A disclosed scratch probe, run outside the repo and outside the gate, confirmed both: mypy 2.3.1 `--strict` reported no issues, and the runtime raised `KeyError: 'ANSWER_CITED'`. The hazard is CONDITIONAL. It is unreachable today, because `far_field_gate` returns one of two fixed values (`app/services/retrieval.py:240`). It becomes live the moment anything delivers the fourth member to the handler.
+- **H-B YES: zero.** 21 sites are gate-reachable and all 21 answer NO. Widening changes no byte of captured stdout, so `b17eec0c…` does not move.
+
+**Phase B preconditions (findings, not instructions).**
+
+- The comment at `app/services/retrieval.py:71`, "Exactly three states, and deliberately no fourth", must be updated or deleted. Otherwise the source asserts its own falsehood.
+- `tests/test_far_field_gate.py:109` prints `sorted(verdicts)` to gate-captured stdout. Widening alone cannot move it; the first distance that yields `ANSWER_CITED` will. That is a deliberate gate move and needs a void-convention entry, not a rollback.
+- `app/api/v1/query.py:134` needs the fourth key before the handler can receive the fourth member.
+
+**Totals (after the Step 3b correction).** 115 sites: 102 from registered patterns, 2 from addendum 1b, 11 from addendum 2c, 0 from addendum 2d (the vault API Contract). By category: ANNOTATION ONLY 1, CONSTRUCTS OR RETURNS 3, COMPARES 9, MAPPING KEY 5, ENUMERATES 0, CROSSES A BOUNDARY 11, UNCLASSIFIED 86. Category 6 by surface: 6-RESPONSE 2, 6-LOG 1, 6-GATE 5, 6-OPENAPI 3. The 86 UNCLASSIFIED are carried as open items `8.13A-S1` to `8.13A-S7`: ledger 62, homonym 8, unpublished comment or docstring 7, import 2, definition site 1, runtime aggregation 1, uncaptured output 5. §K: all five exit criteria PASS.
+
+**Method findings.**
+
+- A pattern set built from the type name and member names cannot see a typed value in motion. This surfaced three times: `verdicts` in the far-field test, `app/services/retrieval.py:242`, and the attribute sweep. Any future inventory prereg must register an attribute, keyword and subscript sweep from the start.
+- §F has no outcome for "matched, but not a consumer". 71 of the 86 UNCLASSIFIED are method artifacts (ledger, homonym, definition site). Only 15 are real §F gaps.
+- The stdout ruling was over-broad and was narrowed in Step 3b. No §G answer changed.
+- The prettier PostToolUse hook rewrites ANY markdown written through Write or Edit, not only `DECISIONS.md`. It turned the dunder pattern `__members__` into bold text during the Amendment 1 write, and the verbatim bytes were restored before sealing. H1 generalizes to all markdown.
+- Citation discipline: a DECISIONS citation of `API Contract.md:241` was first placed at repo line 1997; the actual line is 1996. The off-by-one was caught by reading and corrected in Addendum 2c.
+- The same four gate commands carry two labels: "8.9 §E" in the brief and "V2" in `chunk89-REPORT.md`.
+- The API Contract lives in the vault, not the repo. It holds no registered-pattern match, and `POST /api/v1/query` is absent from it, which is consistent with open item 12.
+
+**Gate claim (§J).** No gate was run. The claim rests on an empty `git diff --stat` at repo HEAD `792b980` across every step.
+
+---
+
 ## 2026-09-13 — Chunk 8.12 Phase A — gate capture recipe PRE-REGISTERED and RUN; canonical gate hash `b17eec0c…`; legacy hashes METHOD NOT ESTABLISHED
 
 > **Status: RECORDED. No `.py` file, test, prompt or schema file is modified by this chunk.**
