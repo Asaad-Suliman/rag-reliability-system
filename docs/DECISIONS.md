@@ -13,6 +13,17 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `injection_scanner` T7 secondary baseline — response-body sha256 pinned, equal across two runs
+
+> **Status: pinned.** Gate `after-a` PASS at `a7d0460` (all five verification checks; gate-combined sha256 `b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a`). Used by T7 in chunk (b).
+
+- **Pinned value:** sha256 of the raw `POST /api/v1/query` response body = `83c6c1392cbd19e963032dc700c56e2ec79227f083de540e4336bc0edbf4bab4` (status 200, 690 bytes).
+- **Method:** `tests/test_query_endpoint.py` `_client(IN_BAND, n_hits=1)` used unchanged; the script only rebinds that module's `_chunk` so the single stubbed hit carries `FIX["t7_request"]["chunk_text"]` (contains `SENTINEL-7f3a`), and posts `FIX["t7_request"]["question"]` with the test key. Real `TiktokenCounter`, `FakeLLMClient`; offline, $0.
+- **Stability:** two sequential requests in one process, a fresh client each: both `83c6c139…` (OBSERVED equal).
+- **Code under test:** HEAD `a7d0460`; `app/` differs from `c788210` only by `app/agents/injection_scanner.py` (unwired). Script archived in the vault at `rag-reliability/passes/rb-02/rb02_baseline.py`, sha256 `0f91fe77e91ff8156b10b264a377d80eb4c4930a26cfc245e47fb9e5c296126e`; output `baseline-d.txt`.
+
+---
+
 ## 2026-09-18 — `injection_scanner` v1 chunk (a) RESULTS — T1, T2, T3, T4a, T5, T6 PASS on the first run; T4b OBSERVED 2 IS-03.1 findings; module committed unwired
 
 > **Status: chunk (a) DONE, pending gate `after-a`.** Pre-registration: the entry below ("`injection_scanner` v1 PRE-REGISTERED").
