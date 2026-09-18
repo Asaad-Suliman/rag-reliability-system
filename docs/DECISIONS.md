@@ -13,6 +13,48 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `injection_scanner` chunk (c) enforcement policy E′ — PRE-REGISTERED: render-time header-open defang in `provenance.render()`, no chunk dropped; IS-03 stays report-only; predictions fixed before any code runs
+
+**Decision.** Option E′ (not the brief's E). Source brief: vault `rag-reliability/passes/rb-06/DECISION-BRIEF-enforcement.md` (written at repo HEAD `e90688a`; RB-06 closed at `95317fb`).
+- IS-01 (header spoof): **defang unconditionally at render**, per chunk body, in `app/services/provenance.py`. No chunk is dropped.
+- IS-02 (fence tag): unchanged. RB-03's `_neutralise` already defangs every variant at generation.
+- IS-03: unchanged. Report-only (log record as T7).
+- Scanner, contract, `generation.py`, `query.py`: unchanged. The `guardrail` object stays RESERVED, UNASSIGNED. 1.1.0 is not sequenced against this.
+
+**Why E′ over E.** E ties protection to the scanner's recall ("a tripwire with unknown recall, not a defence", scanner docstring). E′ removes the structural ambiguity for every chunk whether or not IS-01 fires, keeps on-topic content, and avoids E's open budget re-plan question. Defanging the header *opening* rather than the full IS-01 shape follows RB-03's precedent (variants, not exact tags). The model keys on the opening shape, not on all four fields being present.
+
+**Why not in `_neutralise`.** `build_user_message` applies `_neutralise` to the whole rendered text, which already contains the genuine headers (`generation.py:130`). Widening it would defang every real header. The defang must run on bodies before `render_block` adds the header.
+
+**Evidence (OBSERVED at `95317fb`, scratch `/tmp/rb-scratch/eprime-probe*-out.txt`):**
+- T5 walk: union 35 (30, 33, 30, 32). `app.services.provenance`, `app.services.generation`, `app.api.v1.query`, `app.agents.injection_scanner` all absent. E′ touches no gated module.
+- Frozen corpus (`app/corpus`, 260 chunks via `vector_store._load_corpus(CORPUS_DIR).documents`): prefix `\[(?=\s*doc_id\s*=)` (IGNORECASE) **0**; exact IS-01 0; IS-02 0; substring `doc_id` 0.
+- Citations come from `hit.char_start/char_end` metadata (`query.py:169-170`), never rendered-text offsets. Defanging changes what the model reads, not any locator.
+
+**Change (exact).** In `app/services/provenance.py`:
+1. Derive the header-open key from `HEADER_TEMPLATE` (the literal before the first field, `[doc_id=`), with a drift-guard assert that the template starts with `[` and that literal ends with `=`. Compile `HEADER_OPEN_VARIANT = re.compile(r"\[(?=\s*" + re.escape(key) + r"\s*=)", re.IGNORECASE)` once at module level.
+2. `_defang_header_open(text: str) -> str`: replace each match (the `[` only) with `&#91;`.
+3. In `render()`: `body = _defang_header_open(chunk.text)`; `block = render_block(header, body)`; `text_tokens = count_tokens(body)`. `render_block` and `render_header` are unchanged (`scripts/validate_token_counter.py` imports them).
+
+**Predictions (new `tests/test_header_defang.py`, plain asserts, `uv run --no-sync python -m tests.test_header_defang`):**
+- H1 exact spoof `[doc_id=doc_X page=3 chars=0-10]` in a body → `&#91;doc_id=…` in the body. IS-01 matches over `rendered.text` **== len(chunks)**.
+- H2 partial spoof `[doc_id=X page=3]` → defanged; the H1 count invariant holds.
+- H3 case/whitespace variants `[ DOC_ID = x`, `[\tdoc_id=` → defanged.
+- H4 several spoofs in one body → all defanged; invariant holds.
+- H5 idempotent: `_defang_header_open(_defang_header_open(s)) == _defang_header_open(s)`.
+- H6 clean body → block byte-identical to `render_block(header, text)`.
+- H7 passthrough, unchanged by design: `[1]`, `[doc]`, `[docid=1]`, `[doc_idx=1]`.
+- H8 citations: locator, `char_start`, `char_end`, `header` identical to the raw-text render for H1–H4 fixtures.
+- H9 negative control: the old render path (`render_header` + `render_block` on raw text) over the H1–H4 fixtures gives IS-01 count **> len(chunks)**, so the invariant discriminates.
+- C1 frozen corpus: `_defang_header_open(d) == d` for all 260 `documents`.
+
+**Regression (re-run, all must PASS):** `tests.test_provenance`, `tests.test_injection_scanner` (T1–T7; T4a 0; T4b the same 2 IS-03.1; T5 35; T7 served-body baseline `83c6c139…` unchanged), `tests.test_neutralise_variants`, `tests.test_query_endpoint`; pre-commit ruff / format / gitleaks / mypy --strict. Gate after-c run by Asaad with `passes/chunk812a-run_gate.sh`: **`b17eec0c…` PASS**.
+
+**Accepted and logged.** The budget charges raw text (`context_budget.py:575`). A defanged body is 4 bytes longer per match. That is 0 on the frozen corpus and within the reserves on untrusted input.
+
+**Out of scope.** Query-text and output scanning. Scanner patterns (IS-03 frozen). `generation._CONTEXT_TAG_VARIANT` is hand-written while the scanner's IS-02 is derived: byte-equal today, a latent drift point → RB-09 candidate.
+
+**Stop rule.** Any prediction failing = STOP. Record it, do not retune fixtures or patterns in the same pass.
+
 ## 2026-09-18 — `injection_scanner` T4b terminology clarification: "false-positive baseline" names a reference count, not a judgement; the two matches are classified (INFERRED)
 
 > **Status: CLARIFICATION.** No committed entry is edited. RB-06 Phase 2b.
