@@ -28,10 +28,12 @@ search finds exact terms that embeddings smooth away, and vector search finds
 paraphrases that no keyword matches. RRF fuses by rank rather than score because
 `ts_rank_cd` and cosine distance are not on comparable scales.
 
-**Guardrail** — inspects retrieved content before it reaches the model. Retrieved
-chunks are untrusted input: a document can contain text written to manipulate the
-model that reads it. This stage is also where a query with no adequate supporting
-evidence is stopped rather than answered.
+**Retrieved-content checks** — separate mechanisms, each with its own name and status.
+`far_field_gate` refuses a query whose nearest passage is too far away for the corpus
+to cover it (built). `injection_scanner` scans retrieved chunks for prompt-injection
+text before they reach the model; v1 is report-only and logs, it never blocks (built).
+`relevance_floor`, a reranker-score threshold, is not built. Query-text and output
+scanning are reserved and not started.
 
 **LLM** — generates an answer constrained to the retrieved spans.
 
@@ -53,7 +55,8 @@ The reasoning above is the design. What is implemented today is a subset.
 | CLI — ingest, query, stats, evaluate, reindex, delete  | Built                        | `app/cli.py`                                           |
 | HTTP API                                               | Health endpoints only        | `app/api/v1/`                                          |
 | **Planner**                                            | **Planned, not implemented** | `app/agents/` is empty                                 |
-| **Guardrail — injection blocking, abstention**         | **Planned, not implemented** | `app/agents/` is empty                                 |
+| Far-field gate — out-of-domain refusal                 | Built                        | `app/services/retrieval.py`                            |
+| Injection scanner — retrieved chunks, report-only      | Built (v1)                   | `app/agents/injection_scanner.py`                      |
 | **LLM answer generation**                              | **Planned, not implemented** | `app/agents/` is empty                                 |
 | **Verifier — groundedness scoring, citations**         | **Planned, not implemented** | `app/agents/` is empty                                 |
 

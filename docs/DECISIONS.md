@@ -13,6 +13,22 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — Deferred item 4 (fused-stage prose) resolved: README, `app/agents/__init__.py` and the vault SCRATCHPAD describe the split query-path mechanisms
+
+> **Status: DONE.** Resolves deferred item 4 of the `injection_scanner` v1 pre-registration ("Fused-stage prose in `app/agents/__init__.py:1` and `README.md:31-33, :56`: carried"). RB-05.
+
+- **Truth source (OBSERVED at `b32aa0e`, `app/api/v1/query.py`):** `retrieve()` hybrid + rerank `:98-108` → `far_field_gate()` `:110` (ABSTAIN_OUT_OF_DOMAIN returns without a model call, `:118`) → `plan_context()` `:123` → `injection_scanner` `scan()` report-only `:126-148` → `render()` `:149` → `llm.generate()` `:150-153` → `QueryResponse` `:158-177`.
+- **Mechanism status (OBSERVED, the retirement entry of 2026-09-04 and the `injection_scanner` v1 pre-registration):** `far_field_gate` shipped; `relevance_floor` not built; `injection_scanner` v1 built, retrieved chunks only, report-only; query-text scanning and output scanning reserved, unassigned, not started.
+- **Targets changed:**
+  1. `README.md` — the fused-stage paragraph (`:31-34` at `b32aa0e`) now names the separate mechanisms and their status. The single fused table row (`:56`) is replaced by two rows: far-field gate (built) and injection scanner (built, v1).
+  2. `app/agents/__init__.py` — docstring only. It no longer lists the fused stage or the rejected Query Planner, and no longer says the package is empty.
+  3. Vault `09_Memory/SCRATCHPAD.md:53` — the query path now has the stage order above with line numbers, stamped `(verified 2026-09-18, HEAD b32aa0e)`. The vault commits this through `vault-commit.timer`, not this commit.
+- **Commit:** this entry lands in `docs: describe split query-path mechanisms; retire fused-stage prose`, together with targets 1 and 2.
+- **Gate:** not needed. `app.agents` is outside the gate's 35-module import set (T5 in `tests.test_injection_scanner`, re-run on this change).
+- **Not changed (finding, out of scope):** other stale README lines at `b32aa0e`: `:54` ("HTTP API — Health endpoints only"), `:57` ("LLM answer generation — Planned, not implemented"), "`app/agents/` is empty" in the rows, and `:60` ("`app/agents/` currently contains an `__init__.py` and nothing else", "No answer is generated").
+
+---
+
 ## 2026-09-18 — `_neutralise` widened to `retrieved_context` tag variants RESULTS — N1, N2, N3, N4 PASS on the first run; run against the old code matched its prediction
 
 > **Status: DONE, pending gate `after-rb03` (N5).** Pre-registration: the entry below ("`_neutralise` widened to `retrieved_context` tag variants — PRE-REGISTERED", commit `50ea4ad`).

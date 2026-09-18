@@ -1,5 +1,5 @@
-"""Pipeline agents: Query Planner, Retriever, Guardrail, Verifier.
+"""Pipeline agents. Holds `injection_scanner` (v1, report-only on retrieved chunks).
 
-Empty by design — the agents are built in Step 03. The package exists so the
-layout is stable and later imports do not move.
+The far-field refusal is `far_field_gate` in `app/services/retrieval.py`;
+`relevance_floor` is not built, and query-text and output scanning are not started.
 """
