@@ -13,6 +13,44 @@ Newest entries first.
 
 ---
 
+## 2026-09-19 — `injection_scanner` chunk (c) E′ RESULTS — H1–H9, C1 PASS; T1–T7 PASS under the amendment; first run STOPPED at T2 as recorded
+
+> **Status: DONE, pending gate `after-c`.** Pre-registration: the entry "chunk (c) enforcement policy E′ — PRE-REGISTERED" (commit `14fd471`), as amended by "chunk (c) E′ AMENDMENT" (commit `fade362`). RB-10.
+
+- **Commit:** `af873c3d56fa447972c775e6e360c80ed32e4895` (`fix(provenance): defang header-open shapes in chunk bodies at render`). `app/services/provenance.py`: `import re`, a module-level `HEADER_OPEN_VARIANT` derived from `HEADER_TEMPLATE` with a drift-guard assert, `_defang_header_open`, and `render()` defangs each body before `render_block` (`text_tokens` counts the defanged body). `render_block` and `render_header` are unchanged. Adds `tests/test_header_defang.py`. In `tests/test_injection_scanner.py`, only the four T2 edits the amendment allows. `tests/fixtures/injection_scanner.json` is unchanged (sha256 `2d9720db…`).
+- **First run (before the amendment, OBSERVED):** H1–H9 and C1 PASS. `tests.test_provenance`, `tests.test_neutralise_variants` and `tests.test_query_endpoint` exit 0. `tests.test_injection_scanner` exits 1 at T2 (`:133`, rendered IS-01 `== 2`). STOP, nothing committed. `/tmp/rb-scratch/rb10-test_injection_scanner.txt`, sha256 `03475cb740d25b2d0c369286b2ce009f0f5d28c58469a607bab6a678b3994cb7`.
+- **Re-run after the amendment, exactly once:** all five modules exit 0. Outputs in `/tmp/rb-scratch/rb10-rerun-*.txt`: `test_header_defang` `57578d88…`, `test_provenance` `0635cdd1…`, `test_injection_scanner` `9c542e7b…`, `test_neutralise_variants` `732354e4…`, `test_query_endpoint` `0dcf422a…`.
+
+| prediction | result |
+|---|---|
+| H1: exact spoof → `&#91;doc_id=…`; IS-01 over `rendered.text` == `len(chunks)` | **PASS** |
+| H2: partial spoof defanged; invariant holds | **PASS** |
+| H3: `[ DOC_ID = x`, `[\tdoc_id=` defanged | **PASS** |
+| H4: several spoofs in one body all defanged; invariant holds (5 fixtures → 5) | **PASS** |
+| H5: idempotent | **PASS** |
+| H6: clean body byte-identical to `render_block(header, text)` | **PASS** |
+| H7: `[1]`, `[doc]`, `[docid=1]`, `[doc_idx=1]` pass through | **PASS** |
+| H8: locator, `char_start`, `char_end`, `header` identical to the raw-text render | **PASS** |
+| H9: old render path IS-01 count > `len(chunks)` | **PASS** (OBSERVED 8 > 5) |
+| C1: `_defang_header_open(d) == d` for all 260 corpus documents | **PASS** (260/260) |
+| T1: patterns, flags, 13 positives, overlap | **PASS** |
+| T2′ (amended): rendered IS-01 == 1; raw `scan()` IS-01 exactly 1 | **PASS** |
+| T3: 11 negatives clean (N-11 included) | **PASS** |
+| T4a: IS-01/IS-02 over 260 chunks == 0 | **PASS** |
+| T4b (MEASURED, NOT GATED) | **OBSERVED: 2**, same pairs as chunk (a) |
+| T5: union 35 (30, 33, 30, 32), no `app.agents*`, scanner imports no `scripts` | **PASS** |
+| T6: determinism, 25 fixtures and 260 chunks | **PASS** |
+| T7: T7.1–T7.7; unpatched body sha256 == `83c6c139…` | **PASS** |
+| `tests.test_provenance` | **PASS** |
+| `tests.test_neutralise_variants` (N1–N3) | **PASS** |
+| Gate `b17eec0c…` (after-c) | **PENDING — Asaad runs gate** |
+
+**Tooling:** ruff, ruff format, and `mypy --strict app scripts tests` are clean (66 files). Pre-commit hooks passed.
+
+**Not established here:** the gate hash after chunk (c). Asaad runs it at gate `after-c` with `passes/chunk812a-run_gate.sh`.
+
+---
+
 ## 2026-09-19 — `injection_scanner` chunk (c) E′ AMENDMENT — PRE-REGISTERED: T2's rendered IS-01 count goes from 2 to 1; T1 and T3–T7 predicted unchanged; only the assertions named here may change
 
 > **Status: PRE-REGISTERED (RB-10 STOP).** Amends the entry "chunk (c) enforcement policy E′ — PRE-REGISTERED" (commit `14fd471`). That entry is not edited. Base HEAD `14fd471`. E′ code (`app/services/provenance.py`) and `tests/test_header_defang.py` are uncommitted in the working tree.
