@@ -13,6 +13,29 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `_neutralise` widened to `retrieved_context` tag variants — PRE-REGISTERED
+
+> **Status: PRE-REGISTERED (RB-03 phase 2).** Written before any test or code for this change exists. Deferred item 1 of the entry "`injection_scanner` v1 PRE-REGISTERED". Base HEAD `42c649929ec0939cb33f8858a6327e5e478b8e3f`.
+
+- **Problem (OBSERVED at `42c6499`).** `_neutralise` (`app/services/generation.py:105-114`) is two sequential, case-sensitive `str.replace` calls. `<retrieved_context>` becomes `&lt;retrieved_context&gt;` and `</retrieved_context>` becomes `&lt;/retrieved_context&gt;`. All 8 variants below pass through unchanged (vault `rag-reliability/passes/rb-03/old-behaviour.txt`, sha256 `215078e6910649c2833e00cf02e8f54eeff524a80772149d9d0908f7b74de008`). IS-02 detects them; nothing defangs them.
+- **Change.** `_neutralise` matches `VARIANT_PATTERN` = `<\s*/?\s*retrieved_context\s*>` (the same bytes as IS-02's expected string) with `re.IGNORECASE`, compiled once at module level. Each match containing `/` is replaced with `&lt;/retrieved_context&gt;`, exactly as the close tag is replaced today. Each match without `/` is replaced with `&lt;retrieved_context&gt;`, exactly as the open tag is replaced today. Nothing else changes. `app.services.generation` is not in the 35-module gate import set (T5 walk re-run at `42c6499`, OBSERVED).
+- **Variants list:** `"</RETRIEVED_CONTEXT>"`, `"<Retrieved_Context>"`, `"< retrieved_context>"`, `"</ retrieved_context>"`, `"< /retrieved_context >"`, `"<retrieved_context   >"`, `"<\tretrieved_context>"`, `"<\n/retrieved_context>"` (Python string literals).
+- **Test file:** `tests/test_neutralise_variants.py`. **Oracle:** a verbatim copy of the old function, `generation.py:105-114` at `42c6499`, marked `# FROZEN ORACLE — do not edit`. The sha256 of its source is `31fce72e5a25f04ec13978a5377245d28e4807fe88c43d8374b70e157d8e13fc`, and the test asserts it.
+
+| id | prediction | gated |
+|---|---|---|
+| N1 (differential) | For every input that contains no variant, the new output is byte-identical to the oracle output. Inputs: the exact open tag, the exact close tag, one sentence containing both, the 23 of the 24 positive and negative texts in `tests/fixtures/injection_scanner.json` (all except P-02b, which holds the variant `< /RETRIEVED_CONTEXT >`), the 2 `t7_request` texts, and all 260 corpus chunks via `_load_corpus` (digest-checked). 288 inputs. | yes |
+| N2 | For each of the 8 variants, the new output contains zero matches of `VARIANT_PATTERN` (`re.IGNORECASE`). | yes |
+| N3 (negative control) | N2's assertion, run against the oracle, fails for every variant: all 8 survive the old function. | yes |
+| N4 | All RB-02 tests (T1–T7: `tests.test_injection_scanner`, `tests.test_query_endpoint`) still pass, with those files unchanged. | yes |
+| N5 | Gate byte-identical: `b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a` (gate `after-rb03`, run by Asaad). | yes |
+
+**First run against the unchanged `generation.py` (RB-03 phase 3), predicted:** N1 PASS (288/288; the module function still equals the oracle), N2 FAIL for all 8 variants, N3 PASS (8/8). The module exits non-zero, and only because of N2. Any other outcome is a STOP.
+
+**First run after the change (RB-03 phase 4), predicted:** N1, N2, N3, N4 PASS. Any failure is a STOP, not a fix.
+
+---
+
 ## 2026-09-18 — `injection_scanner` v1 chunk (b) RESULTS — T7 PASS on the first run; T1–T6 still PASS; scanner wired report-only at `query.py`
 
 > **Status: chunk (b) DONE, pending gate `after-b`.** Pre-registration: the entry "`injection_scanner` v1 PRE-REGISTERED". Secondary baseline: the entry "`injection_scanner` T7 secondary baseline".
