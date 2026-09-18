@@ -13,6 +13,56 @@ Newest entries first.
 
 ---
 
+## 2026-09-19 — `injection_scanner` chunk (c) E′ AMENDMENT — PRE-REGISTERED: T2's rendered IS-01 count goes from 2 to 1; T1 and T3–T7 predicted unchanged; only the assertions named here may change
+
+> **Status: PRE-REGISTERED (RB-10 STOP).** Amends the entry "chunk (c) enforcement policy E′ — PRE-REGISTERED" (commit `14fd471`). That entry is not edited. Base HEAD `14fd471`. E′ code (`app/services/provenance.py`) and `tests/test_header_defang.py` are uncommitted in the working tree.
+
+- **What went wrong (OBSERVED, RB-10 step 4).** H1–H9 and C1 PASS. `tests.test_provenance`, `tests.test_neutralise_variants` and `tests.test_query_endpoint` exit 0. `tests.test_injection_scanner` exits 1: T1 PASS, then T2 fails at `tests/test_injection_scanner.py:133` (`findall(rendered.text) == 2`). The module stops there, so T3–T7 did not run. Evidence: `/tmp/rb-scratch/rb10-test_injection_scanner.txt`, sha256 `03475cb740d25b2d0c369286b2ce009f0f5d28c58469a607bab6a678b3994cb7`.
+- **Cause.** T2 pins "a spoofed header survives `render()`". E′ removes exactly that behaviour. The line-16 entry predicts both H1 (rendered IS-01 count == `len(chunks)`) and "T1–T7 PASS". For T2's input those two predictions contradict each other. The code does what the contract says. The contract left T2 out.
+- **Which inputs contain `HEADER_OPEN_VARIANT` matches (OBSERVED, a regex over the fixtures only; no test run):**
+
+| test | input | matches | path under test | effect of E′ |
+|---|---|---|---|---|
+| T1 | P-01a, P-01b | 1 each | `scan()` on raw text | none. `scan()` never renders |
+| T2 | the `render_header("doc_x", 1, 0, 10)` spoof | 1 | `render()` and `scan()` on raw text | rendered count 2 → 1. `scan()` unchanged |
+| T3 | N-11 (`page=one`) | 1 | `scan()` on raw text | none. Still clean |
+| T4a/T4b | 260 corpus chunks | 0 (C1) | `scan()` on raw text | none |
+| T5 | no text input | — | static import walk | none. E′ adds only `import re` (stdlib), and `app.services.provenance` is outside the 35-module set |
+| T6 | fixtures, the T2 spoof, 260 chunks | as above | `scan()` only | none |
+| T7 | `t7_request.question`, `.chunk_text` | 0, 0 | full `POST /api/v1/query` | none. See below |
+
+- **T7 served body (`83c6c139…`) cannot change under E′. Two independent reasons:** (1) `t7_request.chunk_text` has 0 matches, so `render()` output is byte-identical (H6). (2) The response body never contains rendered text anyway. `answer` is `FakeLLMClient.text` (the fixed "a generated answer"). `citations[*].text` is raw `hit.text`, and every other citation field is hit metadata (`query.py:158-177`). `text_tokens` is not served.
+
+**Corrected expectation (T2 only):**
+- `tests/test_injection_scanner.py:133`: `== 2` becomes `== 1`.
+- The raw `scan([chunk])` IS-01 count stays **exactly 1** (`["IS-01"]`). E′ changes only what `render()` emits; detection on raw text is unaffected.
+
+**Predictions for the re-run of `tests.test_injection_scanner` (all must PASS):**
+
+| id | prediction |
+|---|---|
+| T1 | unchanged: 6 patterns and flags equal the fixture strings; 13 positives yield exactly their findings; the overlap sentence yields `IS-03.1`, `IS-03.2` |
+| T2′ | IS-01 over `render([chunk]).text` == **1**; raw `scan([chunk])` check ids == `["IS-01"]`, IS-01 count exactly **1** (unchanged) |
+| T3 | unchanged: 11 negatives scan clean (N-11 included) |
+| T4a | unchanged: IS-01/IS-02 over 260 corpus chunks == 0 |
+| T4b | unchanged: OBSERVED 2, pairs `(chk_01M0D4BMG91ZVSTPZ6APTRFJ4N, IS-03.1)`, `(chk_01M0D4BMH21T4CEP08KEE417PZ, IS-03.1)` |
+| T5 | unchanged: union 35, per entry point (30, 33, 30, 32), no `app.agents*`, the scanner imports no `scripts` |
+| T6 | unchanged: `scan(x) == scan(x)` for 25 fixtures and all 260 chunks |
+| T7 | unchanged (`tests.test_query_endpoint`): T7.1–T7.7 PASS; unpatched body sha256 == `83c6c1392cbd19e963032dc700c56e2ec79227f083de540e4336bc0edbf4bab4` |
+
+All other line-16 predictions and regressions stand as written: H1–H9, C1, `tests.test_provenance`, `tests.test_neutralise_variants`, `tests.test_query_endpoint`, pre-commit, and gate `b17eec0c…` (run by Asaad).
+
+**Change rule.** In `tests/test_injection_scanner.py`, only these may change:
+1. the literal `2` in the assertion at `:133`, to `1`;
+2. the T2 `print` message at `:136`, to state 1 match in the rendered text;
+3. the T2 bullet in the module docstring (`:12`), and the T2 function name, `test_t2_spoofed_header_survives_render` → `test_t2_spoofed_header_defanged_at_render` (definition and its call in `main()`).
+
+No other assertion, fixture, pattern or test file changes. `tests/fixtures/injection_scanner.json` stays at sha256 `2d9720db…`.
+
+**Stop rule.** Any prediction above failing = STOP. Record it. Do not retune in the same pass.
+
+---
+
 ## 2026-09-18 — `injection_scanner` chunk (c) enforcement policy E′ — PRE-REGISTERED: render-time header-open defang in `provenance.render()`, no chunk dropped; IS-03 stays report-only; predictions fixed before any code runs
 
 **Decision.** Option E′ (not the brief's E). Source brief: vault `rag-reliability/passes/rb-06/DECISION-BRIEF-enforcement.md` (written at repo HEAD `e90688a`; RB-06 closed at `95317fb`).
