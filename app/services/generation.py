@@ -25,6 +25,7 @@ usage, model and stop reason are.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,10 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "agents" / "prompts"
 # tag could end the block early and have its remainder read as instructions.
 CONTEXT_OPEN = "<retrieved_context>"
 CONTEXT_CLOSE = "</retrieved_context>"
+
+# Either tag in any case, with whitespace inside the brackets (`< /RETRIEVED_CONTEXT >`).
+# Same bytes as injection_scanner's IS-02 pattern.
+_CONTEXT_TAG_VARIANT = re.compile(r"<\s*/?\s*retrieved_context\s*>", re.IGNORECASE)
 
 # The only stop reason that means "the model finished saying what it had to say".
 _SUCCESS_STOP_REASON = "end_turn"
@@ -103,14 +108,17 @@ def load_prompt(name: str) -> str:
 
 
 def _neutralise(value: str) -> str:
-    """Defang both fence tags wherever they appear in untrusted text.
+    """Defang both fence tags, and their case and whitespace variants, wherever
+    they appear in untrusted text.
 
     Escaping the angle brackets keeps the text readable to the model while
     making it impossible for a passage -- or a question -- to close the block
-    early and have what follows read as instructions.
+    early and have what follows read as instructions. A variant is replaced
+    exactly as the exact tag of the same kind (close if it contains `/`).
     """
-    return value.replace(CONTEXT_OPEN, "&lt;retrieved_context&gt;").replace(
-        CONTEXT_CLOSE, "&lt;/retrieved_context&gt;"
+    return _CONTEXT_TAG_VARIANT.sub(
+        lambda m: "&lt;/retrieved_context&gt;" if "/" in m.group() else "&lt;retrieved_context&gt;",
+        value,
     )
 
 
