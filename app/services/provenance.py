@@ -34,6 +34,7 @@ counter is injected — this module never picks or loads a tokenizer.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -42,6 +43,18 @@ from typing import Protocol
 # imports `render_header`/`render_block` rather than reconstructing it, so the
 # measurement and the renderer cannot drift.
 HEADER_TEMPLATE = "[doc_id={document_id} page={page} chars={char_start}-{char_end}]"
+
+# The header opening a chunk body must not be able to reproduce. Derived from
+# `HEADER_TEMPLATE` (the literal before its first field, `[doc_id=`) so a
+# changed template fails the import instead of silently not matching.
+_HEADER_OPEN_LITERAL = HEADER_TEMPLATE.split("{", 1)[0]
+assert _HEADER_OPEN_LITERAL.startswith("[") and _HEADER_OPEN_LITERAL.endswith("="), (
+    _HEADER_OPEN_LITERAL
+)
+_HEADER_OPEN_KEY = _HEADER_OPEN_LITERAL[1:-1]
+HEADER_OPEN_VARIANT = re.compile(
+    r"\[(?=\s*" + re.escape(_HEADER_OPEN_KEY) + r"\s*=)", re.IGNORECASE
+)
 
 # Locator: (document_id, char_start, char_end).
 Locator = tuple[str, int, int]
@@ -141,6 +154,15 @@ def render_block(header: str, text: str) -> str:
     return f"{header}\n{text}\n\n"
 
 
+def _defang_header_open(text: str) -> str:
+    """Replace the `[` of every header-open variant in a chunk body with `&#91;`.
+
+    Runs on bodies only, before `render_block` adds the genuine header, so a
+    body can never contain something that opens like a provenance header.
+    """
+    return HEADER_OPEN_VARIANT.sub("&#91;", text)
+
+
 def render(chunks: Sequence[ChunkRecord], count_tokens: Callable[[str], int]) -> RenderedContext:
     """Render `chunks`, in the given order, into context text plus citations.
 
@@ -166,7 +188,8 @@ def render(chunks: Sequence[ChunkRecord], count_tokens: Callable[[str], int]) ->
             char_start=chunk.char_start,
             char_end=chunk.char_end,
         )
-        block = render_block(header, chunk.text)
+        body = _defang_header_open(chunk.text)
+        block = render_block(header, body)
         parts.append(block)
         citations[locator] = Citation(
             locator=locator,
@@ -178,6 +201,6 @@ def render(chunks: Sequence[ChunkRecord], count_tokens: Callable[[str], int]) ->
             char_end=chunk.char_end,
             header=header,
             block_tokens=count_tokens(block),
-            text_tokens=count_tokens(chunk.text),
+            text_tokens=count_tokens(body),
         )
     return RenderedContext(text="".join(parts), citations=citations)

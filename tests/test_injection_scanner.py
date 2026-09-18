@@ -9,7 +9,7 @@ nothing here derives an expectation by running the code under test.
 
   * T1  per-check units: exact findings per positive fixture; frozen and
         hand-written pattern strings and flags.
-  * T2  a spoofed header survives `render()` next to the real one.
+  * T2  a spoofed header is defanged by `render()`; only the real one matches.
   * T3  negative controls scan clean.
   * T4a IS-01/IS-02 over the 260 frozen corpus chunks: 0 findings (GATED).
   * T4b IS-03 over the same chunks: MEASURED, not gated. Prints the count and
@@ -125,15 +125,15 @@ def test_t1_positives() -> None:
     print(f"ok: T1 {len(FIXTURES['positives'])} positive fixtures yield exactly their findings")
 
 
-def test_t2_spoofed_header_survives_render() -> None:
+def test_t2_spoofed_header_defanged_at_render() -> None:
     spoof = render_header(document_id="doc_x", page=1, char_start=0, char_end=10)
     text = f"The summary quotes {spoof} as if it were a real citation."
     chunk = _Chunk("chunk_t2", "doc_real", "real.pdf", 4, 100, 100 + len(text), text)
     rendered = render([chunk], len)
-    assert len(PATTERNS["IS-01"].findall(rendered.text)) == 2
+    assert len(PATTERNS["IS-01"].findall(rendered.text)) == 1
     result = scan([chunk])
     assert [f.check_id for f in result.findings] == ["IS-01"], _triples(result)
-    print("ok: T2 IS-01 matches the rendered text 2 times for 1 chunk; scan() finds 1 on raw text")
+    print("ok: T2 IS-01 matches the rendered text 1 time for 1 chunk; scan() finds 1 on raw text")
 
 
 def test_t3_negatives() -> None:
@@ -235,7 +235,7 @@ def test_t6_determinism(chunks: list[_Chunk]) -> None:
 def main() -> None:
     test_t1_patterns()
     test_t1_positives()
-    test_t2_spoofed_header_survives_render()
+    test_t2_spoofed_header_defanged_at_render()
     test_t3_negatives()
     chunks = _corpus_chunks()
     test_t4_corpus(chunks)
