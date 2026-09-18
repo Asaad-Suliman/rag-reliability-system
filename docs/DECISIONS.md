@@ -13,6 +13,26 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `injection_scanner` T4b terminology clarification: "false-positive baseline" names a reference count, not a judgement; the two matches are classified (INFERRED)
+
+> **Status: CLARIFICATION.** No committed entry is edited. RB-06 Phase 2b.
+
+- **The phrase and where it appears (OBSERVED):**
+  - repo `docs/DECISIONS.md`, the `injection_scanner` v1 chunk (a) RESULTS entry: "This is the false-positive baseline for chunk (c)." (`:34` at `a7d0460`; `:72` at `42c6499`);
+  - spec `rag-reliability/passes/pass-g1/SPEC-injection-scanner.md` (v5, sha256 `d9d7d97f…`): `:353` ("The count is the **false-positive baseline for chunk (c)**") and its embedded draft entry at `:599`. The same wording is in the pre-registration entry.
+- **What it means:** the IS-03 match count on the frozen 260-chunk corpus, used as the reference for chunk (c). It is **not** a judgement that the matches are false.
+- **Classification of the T4b matches** (RB-06, text read offline via `_load_corpus`; every class is **INFERRED**):
+
+| chunk_id | check_id | class |
+|---|---|---|
+| `chk_01M0D4BMG91ZVSTPZ6APTRFJ4N` | IS-03.1 | benign mention (INFERRED) |
+| `chk_01M0D4BMH21T4CEP08KEE417PZ` | IS-03.1 | illustrative payload (INFERRED) |
+
+- **Naming rule from here on:** later work calls these "T4b matches", never "false positives", unless a class says so. Neither class above does.
+- **Pointer:** the full classification, with the matched spans, is in the vault at `rag-reliability/passes/rb-06/DECISION-BRIEF-enforcement.md` §2.2.
+
+---
+
 ## 2026-09-18 — Deferred item 4 (fused-stage prose) resolved: README, `app/agents/__init__.py` and the vault SCRATCHPAD describe the split query-path mechanisms
 
 > **Status: DONE.** Resolves deferred item 4 of the `injection_scanner` v1 pre-registration ("Fused-stage prose in `app/agents/__init__.py:1` and `README.md:31-33, :56`: carried"). RB-05.
