@@ -13,6 +13,24 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — Chunk 8.14 Phase B4 — A5 ESTABLISHED: the ingest deletes Qdrant points for a note removed from disk, by direct point-ID retrieval
+
+> **Status: ESTABLISHED by direct observation.** Scope is deliberately narrow; see the scope limit below.
+
+**Claim (A5).** When a `.md` note is removed from the vault, the next ingest cycle removes that note's points from the Qdrant `devbrain` collection. Until B4 this path had never run against a real orphan — every prior measurement showed 0 orphans.
+
+**Method.** Predictions frozen before any mutation in `PREREG-B4.md` (sha256 `8ef6675d0bd0520c63200635b644811385c9bf7bc70bdf8193ab8d842fdf91bd`) and `AMENDMENT-B4-1.md` (sha256 `162b18ee23e3dd87418deabe28120fac7b15779b9673efcb0003b8e66f8eddf9`), both re-verified unchanged at preflight. `vault-commit.timer` was stopped so every cycle was started by hand and attributable. A probe note of frozen content (sha256 `917b5e06…`, 3 chunks) was written to the vault root; its three point IDs were computed offline as `uuid5(NAMESPACE_URL, "path#i")` *before* the note existed. Cycle 1 (P2) ingested it; the note was then deleted and cycle 2 (P3) run. Counts came from a read-only scroll of the collection reused from B3 P6, plus an on-disk reconcile using `ingest.py`'s own scan rules.
+
+**Result.** Points 1819 → 1822 → **1819**; files 212 → 213 → **212**; orphans/missing/hash-mismatch 0/0/0 throughout. The load-bearing evidence is not the count: the three IDs `569f2566-bd49-587d-9b31-aca870fe9047`, `79f7f3cb-ccec-528c-a9f2-f397ef42b0f7` and `37b9bc97-5137-5b79-9855-e04a4c3e6cb3` were **FOUND** by direct ID retrieval at P2 and **ABSENT** at P3. A filtered scroll on the probe's `file_path` returned 0 points, and the full scroll dump contained 0 rows for it. The P3 cycle logged `Changed: 0 | Chunks embedded: 0` — nothing was re-embedded, so the drop came through the deletion path alone. A per-file diff of the 212 other files before the probe existed and after it was removed was byte-identical: the deletion was surgical. The code is the orphan sweep at `services/ingest/ingest.py:152-154`, calling `delete_file_points` at `:118-124`.
+
+**Verdict.** **A5: ESTABLISHED.**
+
+**Evidence pointer.** `REPORT-B4.md`, sha256 `872080ff8bd80a05ab3d630cc4c5b5fe3c12578d7dd215531482330304fbae77`, with the raw per-stage outputs it names.
+
+**Scope limit — what this does NOT establish.** Deletion was exercised once, for one file with 3 chunks, in a single cycle, with the vault otherwise quiet. Multi-file deletion in one cycle, partial-batch failure (`client.delete` succeeding for some orphans and raising for others mid-loop), deletion racing a concurrent write, deletion of a file spanning many chunks, and on-disk reclamation of the freed points all remain unobserved and are not licensed by this result.
+
+---
+
 ## 2026-09-15 — Chunk 8.13 Phase A — `FarFieldVerdict` consumer inventory: ENUMERATES is zero across 115 sites; exactly one runtime hazard (`_VERDICT_MEANING`, conditional); zero gate hazards
 
 > **Status: RECORDED. No repository file is modified by this chunk.** No `.py`, test, prompt or schema file changed. No gate was run, and no network, paid or Anthropic call was made.
