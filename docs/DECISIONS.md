@@ -13,6 +13,34 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `injection_scanner` v1 chunk (a) RESULTS — T1, T2, T3, T4a, T5, T6 PASS on the first run; T4b OBSERVED 2 IS-03.1 findings; module committed unwired
+
+> **Status: chunk (a) DONE, pending gate `after-a`.** Pre-registration: the entry below ("`injection_scanner` v1 PRE-REGISTERED").
+
+- **Commit:** `fbd1fe7f022178bd50c95a779f1aea3365731b5f` (`feat(agents): injection_scanner v1, report-only, unwired`). Adds `app/agents/injection_scanner.py` and `tests/test_injection_scanner.py`. No file in `app/` imports the module.
+- **First run, exactly once:** `uv run --no-sync python -m tests.test_injection_scanner`, exit 0. Output archived in the vault at `rag-reliability/passes/rb-02/first-run-a.txt`, sha256 `d2e698898f9cc340b688dc005139440e501bf5832b2a8070a511bc31e42a606b`.
+- **Fixture file:** `tests/fixtures/injection_scanner.json`, sha256 `2d9720dbd1acfe837bb27b6c213da09cce0faf243a195e224d22d5cf801bdcac` (commit `29be348`).
+
+| prediction | result |
+|---|---|
+| T1: 6 compiled patterns and flags equal the pre-registered strings; 13 positive fixtures yield exactly their listed findings; the overlap sentence yields exactly IS-03.1 and IS-03.2 | **PASS** |
+| T2: IS-01 matches the rendered text 2 times for 1 chunk; `scan()` returns 1 IS-01 finding on the raw text | **PASS** |
+| T3: 11 negative controls (N-01 to N-11) scan clean | **PASS** |
+| T4a (GATED): IS-01/IS-02 over the 260 corpus chunks, 0 findings | **PASS** |
+| T4b (MEASURED, NOT GATED): IS-03 over the 260 corpus chunks | **OBSERVED: 2** |
+| T5: union 35 modules, per entry point (30, 33, 30, 32); no `app.agents*`; scanner imports nothing under `scripts` | **PASS** |
+| T6: `scan(x) == scan(x)` for 25 fixtures and all 260 chunks | **PASS** |
+
+**T4b pairs** (chunk id and check id only, no text): `(chk_01M0D4BMG91ZVSTPZ6APTRFJ4N, IS-03.1)`, `(chk_01M0D4BMH21T4CEP08KEE417PZ, IS-03.1)`. This is the false-positive baseline for chunk (c). The patterns stay frozen.
+
+**Existing suite** (no runner in the repo, so each module was run with `uv run --no-sync python -m tests.<name>`): `test_budget_counter_default`, `test_far_field_gate`, `test_generation`, `test_provenance`, `test_query_endpoint`, `test_vector_search_stability`. All exit 0.
+
+**Tooling:** ruff, ruff format, and `mypy --strict app scripts tests` are clean (64 files). Pre-commit hooks passed.
+
+**Not established here:** the gate hash after chunk (a). Asaad runs it at gate `after-a`.
+
+---
+
 ## 2026-09-18 — `injection_scanner` v1 PRE-REGISTERED: a deterministic LLM01 tripwire on retrieved context, report-only; IS-01 value forms verified, IS-01/IS-02 expected strings hand-written, IS-03 pattern strings frozen; gate pinned by recipe script hash; predictions fixed before any code runs
 
 *Line citations into this file are pinned to `c788210`.*
