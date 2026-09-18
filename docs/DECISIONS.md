@@ -13,6 +13,28 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — Chunk 8.14 Pass C1 — devbrain-search no longer reports every Qdrant failure as "unreachable": the bare except at `server.py:84` is replaced by six MRO-ordered handlers; the catch-all backstop is RETAINED
+
+> **Status: FIXED and verified.** Connection-refused and 404 observed live; every other failure mode verified by fault injection only.
+
+**Defect.** `services/mcp-qdrant/server.py:84-85` caught bare `Exception` and raised `Qdrant unreachable at {url} — is the service running?` with no `from`. Observed live: with Qdrant up and answering `404 Not Found` for a missing collection, the user was told the service was unreachable.
+
+**Method.** Preregistered in `PREREG-C1.md` (sha256 `ea300a7c9e2d6f514ef7f4e85bcd6cc98dbaf90eb37687500a5f2c841c7b5725`) and amended in `AMENDMENT-C1-1.md` (sha256 `c2069d3369ae23d8da22b9cc102de0a8f8b261e0abee31af3519088783e2aef8`), both frozen before any source change. The prereg replaced the runbook's handler table, which had been written from an unverified reading. Every correction was established by executing the real qdrant-client 1.18.0 code path: the wrapped transport error is on `ResponseHandlingException.source`, not `__cause__` (`api_client.py:136` raises without `from`); a 429 without `Retry-After` arrives as `UnexpectedResponse(429)`; a malformed `Retry-After` raises `QdrantException`. Handler order was derived from the installed MROs, and a shadow check was computed from the installed file's AST: PASS. Versions are pinned in a new `services/mcp-qdrant/requirements.txt`, because the service had no dependency manifest.
+
+**Decision.** Six handlers, each `as e` and `raise ToolError(...) from e`: connectivity (source `ConnectError`/`ConnectTimeout`) · other request failure · non-2xx by status (404 reported as ambiguous, auth, 429, other) · rate-limited with `retry_after_s` · `QdrantException` · `KeyError` guarded to the three config keys the try block reads · backstop.
+
+**Reasoning.** The backstop is kept deliberately. Without it, an unanticipated exception would take down the stdio server instead of returning `isError=True`. The defect was that the catch-all lied about the cause, not that it existed. It now names the real type. The `KeyError` guard trades a specific message for an honest one. The 404 message reports rather than asserts, because a wrong URL path produces the same status.
+
+**Verification.** `test_server_errors.py` (new, 16 fault-injection cases through an in-memory MCP session) PASS. The same tests FAIL against the pre-fix `server.py`, which is the negative control. `test_p2_unreachable_is_error` is repaired to be deterministic (it previously failed at `:108` with both backends up). It now tests handling, not outage; a real outage is covered only by `test_p2_live_backend_down --live`, which passed once with Qdrant stopped. The live stop/start of the container left 1898 points / 223 files / 0/0/0 byte-identical; the next cycle embedded 0 chunks.
+
+**Finding.** Three inference chains in this work were refuted by execution: the B4 timer defect, the `:109` prediction, and `__cause__`. Readings of library behaviour in this codebase have a poor track record against observation. Claims about control flow should be executed rather than reasoned about.
+
+**Evidence pointer.** `REPORT-C1.md`, sha256 `06a8554111800705de86fdc85476c890a3ce58e48ed7dba9d3d52b7d1ea8151f`, archived under `rag-reliability/passes/chunk814-c1/`.
+
+**Scope limit — what this does NOT establish.** Auth, timeouts, 429 in either form, 5xx, malformed bodies and KeyErrors were never produced by a real Qdrant. ConnectTimeout was never observed live. 404 cannot distinguish a missing collection from a wrong path. `requirements.txt` was not install-tested. The same `except Exception` pattern at `services/ingest/ingest.py:145` and `services/agents/research_agent.py:271` is out of scope and unchanged.
+
+---
+
 ## 2026-09-18 — Chunk 8.14 Phase B4 — A5 ESTABLISHED: the ingest deletes Qdrant points for a note removed from disk, by direct point-ID retrieval
 
 > **Status: ESTABLISHED by direct observation.** Scope is deliberately narrow; see the scope limit below.
