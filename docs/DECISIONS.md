@@ -13,6 +13,33 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `injection_scanner` v1 chunk (b) RESULTS — T7 PASS on the first run; T1–T6 still PASS; scanner wired report-only at `query.py`
+
+> **Status: chunk (b) DONE, pending gate `after-b`.** Pre-registration: the entry "`injection_scanner` v1 PRE-REGISTERED". Secondary baseline: the entry "`injection_scanner` T7 secondary baseline".
+
+- **Commit:** `0db22e8676608f6dadcce1ee6faa88a25d93a802` (`feat(api): wire injection_scanner in report-only mode`). `app/api/v1/query.py` imports `scan` at module level and calls it on `budgeted.included` between `plan_context()` and `render()`, inside one `except Exception` backstop. `tests/test_query_endpoint.py` adds T7. The existing test is unchanged except for one optional `chunk_text` argument on `_client()`. It defaults to `None`, and in that case the hits are the same as before.
+- **First run, exactly once:** `uv run --no-sync python -m tests.test_query_endpoint` then `-m tests.test_injection_scanner`, both exit 0. Output archived in the vault at `rag-reliability/passes/rb-02/first-run-b.txt`, sha256 `4fcab15a1d440169c63fb474fc329764b91c997da96d2d54544e1062d4743048`.
+
+| prediction | result |
+|---|---|
+| T7.1: HTTP 200 with `scan` patched to raise `RuntimeError` | **PASS** |
+| T7.2: patched body byte-equal to the unpatched body (primary baseline, byte-stable across two unpatched requests), and the unpatched body's sha256 equals the pinned `83c6c139…` (secondary baseline) | **PASS** |
+| T7.3: exactly one `"injection scan failed"` record, extra fields exactly `{exc_type, chunks_scanned}`, `exc_type == "RuntimeError"`; the formatted record has neither the raised message nor chunk text | **PASS** |
+| T7.4: `FakeLLMClient` called exactly once on each path | **PASS** |
+| T7.5: no success-path `"injection scan"` record on the failure path | **PASS** |
+| T7.6: `SENTINEL-7f3a` absent from `getMessage()`, `args` and `exc_text` of every record, on both paths | **PASS** |
+| T7.7: unpatched, exactly one `"injection scan"` record, extra fields exactly `{chunks_scanned, counts, chunk_ids}`, `counts` has all six check ids | **PASS** |
+| T1, T2, T3, T4a, T5 (35 modules; 30, 33, 30, 32), T6: re-run with the wiring in place | **PASS** |
+| T4b (MEASURED, NOT GATED) | **OBSERVED: 2**, same pairs as chunk (a) |
+
+**Existing suite** (each module run with `uv run --no-sync python -m tests.<name>`): `test_budget_counter_default`, `test_far_field_gate`, `test_generation`, `test_injection_scanner`, `test_provenance`, `test_query_endpoint`, `test_vector_search_stability`. All exit 0. Tails are at `rag-reliability/passes/rb-02/suite-b.txt`, sha256 `6f2b307e2f449d4fa3c20ac73d2a1873e2bbc6862d77917e674514ad5036fbc1`.
+
+**Tooling:** ruff, ruff format, and `mypy --strict app scripts tests` are clean (64 files). Pre-commit hooks passed.
+
+**Not established here:** the gate hash after chunk (b). Asaad runs it at gate `after-b`.
+
+---
+
 ## 2026-09-18 — `injection_scanner` T7 secondary baseline — response-body sha256 pinned, equal across two runs
 
 > **Status: pinned.** Gate `after-a` PASS at `a7d0460` (all five verification checks; gate-combined sha256 `b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a`). Used by T7 in chunk (b).
