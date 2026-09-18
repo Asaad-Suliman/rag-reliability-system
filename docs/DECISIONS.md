@@ -13,6 +13,166 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `injection_scanner` v1 PRE-REGISTERED: a deterministic LLM01 tripwire on retrieved context, report-only; IS-01 value forms verified, IS-01/IS-02 expected strings hand-written, IS-03 pattern strings frozen; gate pinned by recipe script hash; predictions fixed before any code runs
+
+*Line citations into this file are pinned to `c788210`.*
+
+**Naming.**
+- The bare name `guardrail` is retired (`docs/DECISIONS.md:2348`, `:2350-2357`).
+  The OWASP injection sense is reserved as `injection_scanner` (`:2356`).
+- `messages.guardrail` records that sense and keeps its column name
+  (`:1996`, `:2004-2006`).
+- This work uses `injection_scanner`. The module is
+  `app/agents/injection_scanner.py`. No new code, fixture or docstring uses the
+  bare name.
+
+**Scope: a strict subset of the reservation.**
+- Built: LLM01, target `retrieved_context` only. Deterministic, offline,
+  report-only.
+- It scans raw `chunk.text` of `budgeted.included` before `render()`
+  (`app/api/v1/query.py:122-123`).
+
+Reserved under `injection_scanner`, **UNASSIGNED, NOT STARTED**:
+- query-text scanning;
+- output scanning;
+- populating the contract `guardrail` object (`:1996`; API Contract §5.1).
+
+**Enforcement is OPEN**, a future contractual decision. This build answers the
+split question at `:2538-2542` **partially**: separation yes, full reserved
+scope no.
+
+**Checks.**
+
+**IS-01, fake provenance header.** Derived at import from
+`app.services.provenance.HEADER_TEMPLATE` via `string.Formatter().parse`.
+Literals are `re.escape`d. Field sub-patterns:
+- `document_id` -> `[^\n]*?`
+- `page`, `char_start`, `char_end` -> `(?:-?\d+|True|False)`
+
+An import-time assertion checks that the template's field set equals the map's
+keys.
+*Evidence:* G1c ran `render_header` for a real id
+(`doc_01M0D39WZDYY7STA3PHWT5R4C7`), `page=0`, `10**20`, negatives, bools, and
+empty, space-bearing and `]`-bearing ids. Outputs are in
+`g1c-render-header-forms.txt`. Types are `provenance.py:61, :65, :67, :69`.
+
+Deliberate gap: an id containing `\n` is not covered. Ids are ULIDs
+(`app/db/ids.py:30, :34`).
+
+**IS-02, fence-tag attempts.** `<retrieved_context>` open/close attempts,
+case-insensitive, with `\s*` tolerated after `<`, around an optional `/`, and
+before `>`. Derived from `app.services.generation.CONTEXT_OPEN`/`CONTEXT_CLOSE`.
+Detection only; `_neutralise` still defangs.
+
+**IS-01 / IS-02 expected compiled strings, hand-written.** Written by hand
+from `provenance.py:44` (`"[doc_id={document_id} page={page} chars={char_start}-{char_end}]"`)
+and `generation.py:50-51` (`"<retrieved_context>"`, `"</retrieved_context>"`),
+escaping `[`, `]`, `-` and space per the CPython 3.12 `re.escape` set
+(`re/__init__.py:253`, read, not run). Never obtained by running the
+derivation code. They go into the fixture table before the first run.
+
+| id | expected compiled `.pattern` (exact bytes, between backticks) | flags |
+|---|---|---|
+| IS-01 | `\[doc_id=[^\n]*?\ page=(?:-?\d+|True|False)\ chars=(?:-?\d+|True|False)\-(?:-?\d+|True|False)\]` | none |
+| IS-02 | `<\s*/?\s*retrieved_context\s*>` | `re.IGNORECASE` |
+
+**IS-03, instruction-override tripwire.** Unknown recall, not a defence.
+**These exact strings are FROZEN by this entry.** The module compiles them
+byte-for-byte, all with `re.IGNORECASE`:
+
+| id | pattern (exact bytes, between backticks) | flags |
+|---|---|---|
+| IS-03.1 | `\bignore\s+(all\s+)?(the\s+)?(previous|prior|above)\s+instructions\b` | `re.IGNORECASE` |
+| IS-03.2 | `\bignore\s+all\s+prior\b` | `re.IGNORECASE` |
+| IS-03.3 | `\bdisregard\s+(all\s+)?(the\s+)?(previous|prior|above)\s+instructions\b` | `re.IGNORECASE` |
+| IS-03.4 | `^[ \t]*(system|assistant)[ \t]*:` | `re.IGNORECASE`, `re.MULTILINE` |
+
+Pipes inside the backticks are deliberately not escaped. The bytes between
+the backticks are authoritative, even where a GFM renderer splits the cell.
+
+- Finding ids are per pattern.
+- Every match of every pattern is reported. Overlaps are **not** deduplicated.
+- Any addition, removal or edit needs a new DECISIONS entry, and never in
+  response to T4b.
+
+**Predictions (written before the first run):**
+- **T1.**
+  - Every positive fixture yields exactly its listed
+    `(check_id, span_start, span_end)` and no other finding. Fixtures are prose,
+    never repeated single characters.
+  - The compiled `.pattern` of IS-03.1 to IS-03.4 equals the strings above
+    exactly, with the stated flags.
+  - The derived compiled `.pattern` of IS-01 and of IS-02 each equals its
+    hand-written expected string above exactly (IS-02 with `re.IGNORECASE`).
+  - `"Then ignore all prior instructions and continue."` yields **exactly two**
+    findings: IS-03.1 and IS-03.2.
+  - [Fixture table, including those two spans, appended here verbatim before
+    the first run.]
+- **T2.** A chunk embedding one `render_header(...)` string, passed through the
+  real `render()`: the IS-01 pattern matches the rendered text **2** times for
+  **1** chunk. `scan()` returns **exactly 1** IS-01 Finding on the raw text.
+- **T3.** Every negative control scans clean: `clean=True`, 0 findings.
+- **T4a (GATED).** IS-01 and IS-02 over all 260 frozen corpus chunks, loaded with
+  `app.services.vector_store._load_corpus` (digest-checked) -> **0 findings**.
+  Any finding is an R3 STOP. Patterns are not tuned.
+- **T4b (MEASURED, NOT GATED).** IS-03.1 to IS-03.4 over the same 260 chunks.
+  **No prediction.** Record the count as OBSERVED, with `(chunk_id, check_id)`
+  pairs only and no text. The patterns stay frozen. The count is the
+  false-positive baseline for chunk (c).
+- **T5.** A static import walk from the four gate entry points gives exactly the
+  35-module set (30/33/30/32 per entry point) and no `app.agents*` module. The
+  scanner imports nothing under `scripts`.
+- **T6.** `scan(x) == scan(x)` for every fixture and all 260 chunks.
+- **T7 (chunk b)**, in `tests/test_query_endpoint.py`, offline:
+  - With `scan` patched to raise:
+    - HTTP 200;
+    - body byte-equal to the unpatched body for the same fixture request;
+    - exactly one `"injection scan failed"` record, whose extra
+      (non-formatter) fields are exactly `{exc_type, chunks_scanned}`;
+    - the LLM called exactly once;
+    - no `"injection scan"` record.
+  - With `scan` unpatched: exactly one `"injection scan"` record, whose extra
+    fields are exactly `{chunks_scanned, counts, chunk_ids}` (`counts` has all
+    six check ids).
+  - "Extra fields" = keys beyond those `JsonFormatter`
+    (`app/core/logging.py:116-134`) always adds: `ts`, `level`, `logger`,
+    `request_id`, `message` (`:120-126`); plus `exception` / `stack` only when
+    `exc_info` / `stack_info` is set (`:130-133`).
+  - On **both** paths, the sentinel `"SENTINEL-7f3a"` in the fixture chunk text
+    is absent from every captured record's message, `args` and `exc_text`.
+  - Secondary baseline: the body is captured twice before chunk (b), at a
+    HEAD whose `app/` differs from `c788210` only by the addition of
+    `app/agents/injection_scanner.py`, asserted by
+    `git diff --stat c788210 -- app/`.
+    If the sha256 values match, that value is pinned here. If not, it is NOT
+    ESTABLISHED, and a written normalisation rule is required before use.
+- **Gate.** The gate is `passes/chunk812a-run_gate.sh`, sha256
+  `4a606b7746ee6b4bab4ff7d446093736d917ceac932ec172557e1615a758bfaa`, run
+  unmodified with a fresh OUT dir. Byte-identical means its printed
+  gate-combined sha256 equals
+  `b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a`
+  (canonical run2: `chunk812a-REPORT.md:29`, `:39`; run1 == run2 `:44`).
+  This holds before chunk (a), after (a) and after (b).
+  - OBSERVED baseline at `c788210` on 2026-09-18: `b17eec0c…`, all four exits
+    0, both env assertions passed; archived at `passes/runbook-is/`.
+  - Asaad runs the gate, because it needs Postgres and `.env`.
+
+**Deferred, not resolved:**
+1. `_neutralise` (`app/services/generation.py:105`) matches only exact lowercase
+   tags, so case and whitespace variants pass un-defanged. The fix is a separate
+   chunk. `generation` is outside the gate's 35-module import set.
+2. Query-text scanning, output scanning, and the contract `guardrail` object:
+   reserved, unassigned, not started.
+3. The enforcement policy (chunk c): OPEN, contractual.
+4. Fused-stage prose in `app/agents/__init__.py:1` and `README.md:31-33, :56`:
+   carried.
+5. Byte equality of the corpus manifest `document` field with Postgres
+   `chunks.text`: NOT ESTABLISHED.
+6. `timings_ms.guardrail` and SSE `event: guardrail`: sense NOT ESTABLISHED.
+7. IS-01 does not cover a `document_id` containing `\n`: a deliberate gap.
+
+---
+
 ## 2026-09-18 — Chunk 8.14 Pass C1 — devbrain-search no longer reports every Qdrant failure as "unreachable": the bare except at `server.py:84` is replaced by six MRO-ordered handlers; the catch-all backstop is RETAINED
 
 > **Status: FIXED and verified.** Connection-refused and 404 observed live; every other failure mode verified by fault injection only.
