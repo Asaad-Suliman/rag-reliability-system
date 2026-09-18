@@ -13,6 +13,28 @@ Newest entries first.
 
 ---
 
+## 2026-09-18 — `_neutralise` widened to `retrieved_context` tag variants RESULTS — N1, N2, N3, N4 PASS on the first run; run against the old code matched its prediction
+
+> **Status: DONE, pending gate `after-rb03` (N5).** Pre-registration: the entry below ("`_neutralise` widened to `retrieved_context` tag variants — PRE-REGISTERED", commit `50ea4ad`).
+
+- **Commit:** `62ed10410444ee233b5ebb9b988a05f954436901` (`fix(generation): neutralise retrieved_context tag variants`). Changes `app/services/generation.py`: `import re`, a module-level `_CONTEXT_TAG_VARIANT`, and the body and docstring of `_neutralise`. Adds `tests/test_neutralise_variants.py`. No other file changes.
+- **Run against the old code, exactly once** (phase 3, `generation.py` unchanged): exit 1. N1 PASS 288/288, N2 FAIL 0/8, N3 PASS 8/8. The non-zero exit comes from N2 alone, **as predicted.** Vault `rag-reliability/passes/rb-03/run-old.txt`, sha256 `54b0dcf8b2528b0617aacf24f40785a0157dad17e3b68f44c6275ba0d4b3527e`.
+- **First run after the change, exactly once:** `tests.test_neutralise_variants`, `tests.test_injection_scanner` and `tests.test_query_endpoint`, all exit 0. Vault `rag-reliability/passes/rb-03/run-new.txt`, sha256 `752ac7afe6bce5b90007f8f0c2df90de4f51f584cf7e6a046c44ed99e0c2490d`.
+
+| prediction | result |
+|---|---|
+| N1: 288 variant-free inputs byte-identical to the frozen oracle (source sha256 `31fce72e…` asserted) | **PASS** (288/288) |
+| N2: 8 variants leave zero `VARIANT_PATTERN` matches | **PASS** (8/8) |
+| N3: all 8 variants survive the oracle | **PASS** (8/8) |
+| N4: RB-02 T1–T7 pass, test files unchanged | **PASS** (T4b still OBSERVED 2, same pairs; T7 body sha == pinned `83c6c139…`) |
+| N5: gate `b17eec0c…` | **NOT ESTABLISHED here.** Asaad runs gate `after-rb03`. |
+
+**Existing suite** (each module run with `uv run --no-sync python -m tests.<name>`): all 8 `tests/test_*.py` modules exit 0, including `test_generation` ("fence holds"). Vault `rag-reliability/passes/rb-03/suite.txt`, sha256 `e94cb245d7f56057fbe9860ceed3eb41bbd662e8d8f2032a5cc42768f5cfae68`.
+
+**Tooling:** ruff, ruff format, and `mypy --strict app scripts tests` are clean (65 files). Pre-commit hooks passed.
+
+---
+
 ## 2026-09-18 — `_neutralise` widened to `retrieved_context` tag variants — PRE-REGISTERED
 
 > **Status: PRE-REGISTERED (RB-03 phase 2).** Written before any test or code for this change exists. Deferred item 1 of the entry "`injection_scanner` v1 PRE-REGISTERED". Base HEAD `42c649929ec0939cb33f8858a6327e5e478b8e3f`.
