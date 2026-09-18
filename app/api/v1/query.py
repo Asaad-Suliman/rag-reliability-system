@@ -20,6 +20,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Request
 
+from app.agents.injection_scanner import PATTERNS, scan
 from app.core.security import guard_query
 from app.schemas.query import CitationOut, QueryRequest, QueryResponse
 from app.services.context_budget import ContextBudget, TokenCounter, plan_context
@@ -120,6 +121,31 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
         llm: LLMClient = request.app.state.llm
 
         budgeted = plan_context(result.hits, budget, counter)
+        # Report-only: scan the raw text the model will see, before render()
+        # adds the real headers, and log counts and chunk ids — never text.
+        try:
+            scan_result = scan(budgeted.included)
+            counts = dict.fromkeys(PATTERNS, 0)
+            for finding in scan_result.findings:
+                counts[finding.check_id] += 1
+            logger.info(
+                "injection scan",
+                extra={
+                    "chunks_scanned": scan_result.chunks_scanned,
+                    "counts": counts,
+                    # Findings are in input chunk order, so this keeps it.
+                    "chunk_ids": list(dict.fromkeys(f.chunk_id for f in scan_result.findings)),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Report-only (SPEC §6b): the scanner must never change the response.
+            # Without this, a scanner defect becomes a 500 via
+            # unhandled_exception_handler (app/core/errors.py:280-300, :312).
+            # No exc_info and no str(exc): either could carry chunk text.
+            logger.error(
+                "injection scan failed",
+                extra={"exc_type": type(exc).__name__, "chunks_scanned": len(budgeted.included)},
+            )
         rendered = render(budgeted.included, counter.count)
         generated = await llm.generate(
             _SYSTEM_PROMPT, build_user_message(body.question.strip(), rendered.text)

@@ -32,18 +32,23 @@ network, and no paid call of any kind.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import hashlib
 import io
+import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.agents.injection_scanner import PATTERNS
 from app.api.v1.router import api_router
 from app.core.errors import register_exception_handlers
-from app.core.logging import JsonFormatter
+from app.core.logging import _STANDARD_ATTRS, JsonFormatter
 from app.core.middleware import RequestIDMiddleware
 from app.core.security import (
     CLIENT_KEY_HEADER,
@@ -122,12 +127,14 @@ def _client(
     llm: FakeLLMClient | None = None,
     limiter: RateLimiter | None = None,
     retrieve_calls: list[int] | None = None,
+    chunk_text: str | None = None,
 ) -> Iterator[tuple[TestClient, FakeLLMClient, list[RetrievedChunk]]]:
     """A real app with `retrieve()` stubbed to return `n_hits` at `distance`.
 
     Yields the client, the fake LLM (so a test can assert the call count) and
     the hits the stub returns (so a test can assert citations against the
-    fixture that produced them).
+    fixture that produced them). `chunk_text`, when given, replaces every hit's
+    text and nothing else (T7).
     """
     import app.api.v1.query
 
@@ -137,6 +144,8 @@ def _client(
     query_module: Any = app.api.v1.query
 
     hits = [_chunk(distance, f"chk_{i}", index=i) for i in range(n_hits)]
+    if chunk_text is not None:
+        hits = [dataclasses.replace(hit, text=chunk_text) for hit in hits]
     fake = llm if llm is not None else FakeLLMClient(text=FAKE_ANSWER)
 
     async def _stub_retrieve(*args: Any, **kwargs: Any) -> Retrieval:
@@ -178,6 +187,100 @@ def _client(
             yield client, fake, hits
     finally:
         query_module.retrieve = original
+
+
+# T7 (SPEC-injection-scanner §7). The secondary baseline is pinned in
+# docs/DECISIONS.md, "injection_scanner T7 secondary baseline": the same request's
+# body at a HEAD where app/ differed from c788210 only by the unwired scanner.
+T7_FIXTURE = Path(__file__).parent / "fixtures" / "injection_scanner.json"
+T7_PINNED_BODY_SHA256 = "83c6c1392cbd19e963032dc700c56e2ec79227f083de540e4336bc0edbf4bab4"
+T7_SENTINEL = "SENTINEL-7f3a"
+T7_RAISED_MESSAGE = "t7 scanner defect message"
+
+
+class _RecordList(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _extra_fields(record: logging.LogRecord) -> set[str]:
+    """What `JsonFormatter` would add beyond its own fields (logging.py:127-129)."""
+    return {k for k in record.__dict__ if k not in _STANDARD_ATTRS and not k.startswith("_")}
+
+
+def _t7_request(*, raise_in_scan: bool) -> tuple[bytes, int, list[logging.LogRecord]]:
+    """One T7 request; returns the raw body, the LLM call count and every record."""
+    import app.api.v1.query
+
+    query_module: Any = app.api.v1.query
+    t7 = json.loads(T7_FIXTURE.read_text())["t7_request"]
+
+    def _raising_scan(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(T7_RAISED_MESSAGE)
+
+    capture = _RecordList()
+    root = logging.getLogger()
+    previous, previous_level = root.handlers[:], root.level
+    original_scan = query_module.scan
+    root.handlers = [capture]
+    root.setLevel(logging.DEBUG)
+    if raise_in_scan:
+        query_module.scan = _raising_scan
+    try:
+        with _client(IN_BAND, n_hits=1, chunk_text=t7["chunk_text"]) as (client, fake, hits):
+            assert T7_SENTINEL in hits[0].text, hits
+            r = client.post("/api/v1/query", json={"question": t7["question"]}, headers=AUTH)
+            assert r.status_code == 200, (r.status_code, r.text)
+            return r.content, fake.calls, capture.records
+    finally:
+        query_module.scan = original_scan
+        root.handlers, root.level = previous, previous_level
+
+
+def _assert_no_sentinel(records: list[logging.LogRecord]) -> None:
+    for record in records:
+        for where, value in (
+            ("getMessage()", record.getMessage()),
+            ("args", repr(record.args)),
+            ("exc_text", repr(record.exc_text)),
+        ):
+            assert T7_SENTINEL not in value, (record.getMessage(), where)
+
+
+def _t7() -> None:
+    print("\nT7: the scanner is report-only — a scanner defect never changes the response:")
+    ok_body, ok_calls, ok_records = _t7_request(raise_in_scan=False)
+    again_body, _calls, _records = _t7_request(raise_in_scan=False)
+    # Byte-stability is NOT ESTABLISHED by the spec; asserted before comparing.
+    assert ok_body == again_body, "unpatched body is not byte-stable across two requests"
+    assert hashlib.sha256(ok_body).hexdigest() == T7_PINNED_BODY_SHA256, ok_body
+    assert ok_calls == 1, ok_calls
+
+    scans = [r for r in ok_records if r.getMessage() == "injection scan"]
+    assert len(scans) == 1, [r.getMessage() for r in ok_records]
+    assert _extra_fields(scans[0]) == {"chunks_scanned", "counts", "chunk_ids"}, scans[0].__dict__
+    assert set(scans[0].__dict__["counts"]) == set(PATTERNS), scans[0].__dict__
+    assert not [r for r in ok_records if r.getMessage() == "injection scan failed"]
+    _assert_no_sentinel(ok_records)
+    print(f"  unpatched: 200, body sha256 == pinned {T7_PINNED_BODY_SHA256[:8]}, one scan record")
+
+    bad_body, bad_calls, bad_records = _t7_request(raise_in_scan=True)
+    assert bad_body == ok_body, "a scanner failure changed the response body"
+    assert bad_calls == 1, bad_calls
+    failed = [r for r in bad_records if r.getMessage() == "injection scan failed"]
+    assert len(failed) == 1, [r.getMessage() for r in bad_records]
+    assert _extra_fields(failed[0]) == {"exc_type", "chunks_scanned"}, failed[0].__dict__
+    assert failed[0].__dict__["exc_type"] == "RuntimeError", failed[0].__dict__
+    formatted = JsonFormatter().format(failed[0])
+    assert T7_RAISED_MESSAGE not in formatted and T7_SENTINEL not in formatted, formatted
+    assert not [r for r in bad_records if r.getMessage() == "injection scan"]
+    _assert_no_sentinel(bad_records)
+    print("  scan raises: 200, body byte-equal, one 'injection scan failed' record")
+    print(f"  sentinel absent from every record on both paths; llm calls {ok_calls}/{bad_calls}")
 
 
 def main() -> None:
@@ -507,6 +610,8 @@ def main() -> None:
     assert TEST_KEY not in captured, captured
     assert "***" in captured, captured
     print(f"  {len(captured.splitlines())} log lines captured, 0 contain the key")
+
+    _t7()
 
     print(
         "\nok: answer on ANSWER_UNVERIFIED and null on ABSTAIN, fake called 1/0 times, "
