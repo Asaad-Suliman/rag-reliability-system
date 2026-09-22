@@ -301,8 +301,10 @@ def _demo() -> None:
     from app.services.embeddings import FakeEmbedder
     from app.services.vector_store import InMemoryVectorStore
 
-    corpus = Path("/home/asaad/Downloads/Mastering RAG 2026_compressed.pdf")
-    assert corpus.exists(), f"self-check requires the corpus fixture at {corpus}"
+    pdf = os.environ.get("INGESTION_SELFCHECK_PDF")
+    if not pdf:
+        raise SystemExit("set INGESTION_SELFCHECK_PDF to a PDF to run the ingestion self-check")
+    corpus = Path(pdf)
 
     async def run() -> None:
         settings = get_settings()
