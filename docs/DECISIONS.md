@@ -9,6 +9,9 @@ recorded the same way they were when they happened.
 
 It is mirrored from a private working vault and may lag the code slightly.
 
+References to "the vault" are the author's private research notes, not included in this
+repository.
+
 Newest entries first.
 
 ---

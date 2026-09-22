@@ -1,6 +1,7 @@
 """`injection_scanner` v1: a deterministic LLM01 tripwire on retrieved context.
 
-Report-only and unwired in chunk (a): nothing in `app/` imports this module.
+Report-only: `app/api/v1/query.py` calls `scan()` on the budgeted chunks and logs
+counts and chunk ids; a finding never changes the response.
 Every check is a tripwire with unknown recall, not a defence. Pre-registered in
 `docs/DECISIONS.md`, 2026-09-18, "`injection_scanner` v1 PRE-REGISTERED";
 changing any pattern needs a new DECISIONS entry.
