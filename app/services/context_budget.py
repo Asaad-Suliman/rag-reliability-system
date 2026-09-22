@@ -265,7 +265,7 @@ ANSWER_RESERVE = 4_000
 # reconcile -- they describe DIFFERENT FORMATS. 96 was never measured against
 # any format present in this tree: `git log --all -S` on the 23/40/49/69/74
 # header-token figures once cited as its basis returns exactly one commit,
-# d7483ed, the commit that wrote the claim, and no deleted script stands behind
+# 1e98d47, the commit that wrote the claim, and no deleted script stands behind
 # it. The pre-8.2 reconstruction in `scripts/validate_token_counter.py` that
 # came closest passed a CHUNK id under the `doc_id=` label, so even that
 # measured a wider string than the renderer emits. 96's origin remains NOT

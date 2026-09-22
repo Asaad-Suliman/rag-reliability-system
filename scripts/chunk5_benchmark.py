@@ -124,7 +124,7 @@ def _git_state() -> dict[str, Any]:
 
     The SHA alone would be a lie on a dirty tree — chunk 5's own code was
     uncommitted when these figures were produced, so a reader given only
-    `a8db838` would reproduce a run without the gate in it. Dirty files are
+    `aff027c` would reproduce a run without the gate in it. Dirty files are
     listed, not just flagged.
     """
 

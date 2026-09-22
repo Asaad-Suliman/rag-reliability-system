@@ -6,7 +6,7 @@ Plain asserts, no framework: pytest is not installed in this project and the
 other tests in this directory run the same way.
 
 H1–H9 and C1 are the predictions pre-registered in `docs/DECISIONS.md`
-(chunk (c) enforcement policy E′, commit 14fd471). The invariant under test:
+(chunk (c) enforcement policy E′, commit fad0b7f). The invariant under test:
 after `render()`, IS-01 matches the context string exactly once per chunk —
 the genuine header — whatever the bodies contain.
 """

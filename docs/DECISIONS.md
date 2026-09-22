@@ -19,6 +19,17 @@ Newest entries first.
 
 ---
 
+## 2026-09-22 — Code and test comments now cite post-rewrite commit ids; gate hash `b17eec0c…` → `21fc3625…`, and the only cause is two printed commit ids
+
+> **Status: DONE.** Follows the history rewrite recorded in `docs/HISTORY-REWRITE-2026-09.md`. Hashes in this file and in `docs/chunk5-results.json` / `docs/chunk7-scores.json` are deliberately NOT updated: they are records and cite the old ids.
+
+- **Changed (19 references in 7 files, same abbreviation length):** `5db0925` → `7b447c4` (incl. `_PRE_RERANK_COMMIT` in `app/services/retrieval.py`), `bc1e261` → `0ce3a1f`, `d7483ed` → `1e98d47`, `c788210` → `12093fb`, `14fd471` → `fad0b7f`, `42c6499` → `435bb5e`, `a8db838` → `aff027c`. Each new id resolves to the commit with the same subject line. Files: `app/services/retrieval.py`, `app/services/context_budget.py`, `scripts/chunk5_benchmark.py`, `tests/test_far_field_gate.py`, `tests/test_query_endpoint.py`, `tests/test_header_defang.py`, `tests/test_neutralise_variants.py`.
+- **Gate method.** The recipe was rebuilt from 8.12 §C (streams, framing, `env -i` allowlist, commands, hash). It is not the vault's `chunk812a-run_gate.sh`. Run on the tree before this change, it reproduced **`b17eec0c0d58f13ab744af9efdd73cfe1690cf876f32645cd3b5f243d0da413a`** exactly, with all four exits 0 and every stderr 0 bytes (OBSERVED). That is also the first recorded gate result after RB-03, chunk (c) and the corpus split.
+- **Gate after this change (OBSERVED):** **`21fc3625d81b834f2c76fd3510c7eabbd056a9db63b7c1c211048dd260f6e2db`**, all four exits 0, stderr 0 bytes. `diff` of the combined output shows exactly two lines: gate 3 (`app.services.retrieval`) prints `lineage: 7b447c4` instead of `5db0925`, and gate 4 (`tests.test_far_field_gate`) prints `(0ce3a1f)` instead of `(bc1e261)`. Gate 1 and gate 2 stdout are byte-identical. All twelve figures, `_PRE_RERANK_DIGEST` and the class-1 miss set are unchanged. The only cause of the new hash is the rewritten commit ids.
+- **From here on,** the gate hash to reproduce is `21fc3625…`.
+
+---
+
 ## 2026-09-22 — Golden set v3 text fields moved to a local-only file; the recorded golden-set sha256 `2ca9c82b…` now names the recombined file
 
 > **Status: DONE.** No id, question, offset or other scored field changes. The evaluator reads none of the moved fields.

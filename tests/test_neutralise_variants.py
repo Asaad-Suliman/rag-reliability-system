@@ -53,7 +53,7 @@ N1_EXPECTED_INPUTS = 288
 ORACLE_SOURCE_SHA256 = "31fce72e5a25f04ec13978a5377245d28e4807fe88c43d8374b70e157d8e13fc"
 
 
-# FROZEN ORACLE — do not edit. Verbatim copy of app/services/generation.py:105-114 at 42c6499.
+# FROZEN ORACLE — do not edit. Verbatim copy of app/services/generation.py:105-114 at 435bb5e.
 def _neutralise(value: str) -> str:
     """Defang both fence tags wherever they appear in untrusted text.
 

@@ -65,7 +65,7 @@ DEFAULT_CANDIDATE_K = 30
 # refused — a 25% miss rate on the easiest possible positive class. That is the
 # price of the rule's guarantee that no observed answerable question is refused.
 #
-# Decision, evidence digests and the full derivation: commit `bc1e261`.
+# Decision, evidence digests and the full derivation: commit `0ce3a1f`.
 FAR_FIELD_ABSTAIN_DISTANCE = 1.4932
 
 # Exactly three states, and deliberately no fourth and no confidence score:
@@ -205,7 +205,7 @@ def far_field_gate(retrieval: Retrieval) -> FarFieldDecision:
     require a committed groundedness signal, and none exists: the retrieval-side
     measurement line established that its signals separate *out-of-domain*, not
     *unanswerable*, and that in-domain unanswerability is not distance-separable
-    at all (commit `bc1e261`). ANSWER stays in the type because a Verifier is
+    at all (commit `0ce3a1f`). ANSWER stays in the type because a Verifier is
     the component that can license it; returning it from here would be a claim
     this module cannot support. **No in-band abstention is claimed either** —
     everything below the cut comes back UNVERIFIED, which is the honest carrier
@@ -375,7 +375,7 @@ async def retrieve(
     merely convenient: with it, this function's output is **byte-identical** to
     the pre-reranker implementation, which is what makes chunk 5's no-rerank
     arm a genuine baseline instead of a second code path. `_demo()` asserts
-    that against a pinned digest whose lineage runs back to commit `5db0925`,
+    that against a pinned digest whose lineage runs back to commit `7b447c4`,
     before this parameter existed. `RerankError` is deliberately *not* caught here — see its
     docstring for why the policy belongs at each boundary instead.
     """
@@ -463,11 +463,11 @@ async def retrieve(
 # --- the chunk 5 guarantee ---------------------------------------------------
 # The no-rerank benchmark arm is only a real baseline if it is the *same* code
 # path as the reranked one. These pin that. The digest's lineage runs back to
-# the pre-reranker implementation at 5db0925 — see the note above the constant
+# the pre-reranker implementation at 7b447c4 — see the note above the constant
 # for what changed when the vector backend was replaced, and what was measured
 # before the value was re-pinned.
 
-_PRE_RERANK_COMMIT = "5db0925"
+_PRE_RERANK_COMMIT = "7b447c4"
 _BASELINE_QIDS = ("a01", "a05", "a09", "a13", "a17", "a21", "a25", "u01")
 
 # sha256 over every pre-rerank field of every hit, for the 8 questions above in
@@ -475,7 +475,7 @@ _BASELINE_QIDS = ("a01", "a05", "a09", "a13", "a17", "a21", "a25", "u01")
 #
 # RE-PINNED 2026-08-31, when the vector arm moved from HNSW to exact brute-force
 # search. The previous value, 3ffa60b3…89cfa3a, was captured 2026-08-21 against
-# commit 5db0925 and cannot be regenerated any more: 5db0925's vector arm was
+# commit 7b447c4 and cannot be regenerated any more: 7b447c4's vector arm was
 # Chroma/HNSW, which no longer exists in this tree.
 #
 # What the re-pin costs, measured before it was taken (chunk 7.1g §4a): across
@@ -524,7 +524,7 @@ def _serialize_pre_rerank_fields(hits: list[RetrievedChunk]) -> str:
     """Every field `RetrievedChunk` had before the reranker existed.
 
     `rerank_score`/`rerank_rank` are excluded on purpose — they did not exist
-    at 5db0925, so including them could not match. That they stay None on this
+    at 7b447c4, so including them could not match. That they stay None on this
     path is asserted separately, which together means: everything that existed
     is unchanged, and everything new is provably inert.
     """

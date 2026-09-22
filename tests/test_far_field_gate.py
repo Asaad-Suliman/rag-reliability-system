@@ -5,7 +5,7 @@
 Literal distances only. This test loads NO fixture and opens NO connection:
 `tests/fixtures/query_embeddings.json` is untracked and rewritten on any cache
 miss, so a test that read it would pass or fail depending on a file the repo
-does not contain. Every number below is quoted from commit `bc1e261` and lives
+does not contain. Every number below is quoted from commit `0ce3a1f` and lives
 in this file, which is committed.
 
 $0 and offline by construction — no embedder, no Postgres, no vector store.
@@ -21,7 +21,7 @@ from app.services.retrieval import (
     far_field_gate,
 )
 
-# The three class-1 out-of-domain probes recorded in commit `bc1e261` as falling
+# The three class-1 out-of-domain probes recorded in commit `0ce3a1f` as falling
 # BELOW the cut: the known 25% miss on the easiest possible positive class. They
 # are asserted to come back ANSWER_UNVERIFIED because that is what the adopted
 # rule does, not because it is the desired answer. If a future calibration moves
@@ -60,7 +60,7 @@ def _retrieval(distance: float | None, *, hits: int = 1) -> Retrieval:
 def main() -> None:
     assert FAR_FIELD_ABSTAIN_DISTANCE == 1.4932, FAR_FIELD_ABSTAIN_DISTANCE
 
-    print("class-1 OOD below the cut — the recorded 25% known miss (bc1e261):")
+    print("class-1 OOD below the cut — the recorded 25% known miss (0ce3a1f):")
     for qid, distance in KNOWN_MISSES.items():
         decision = far_field_gate(_retrieval(distance))
         assert decision.verdict == "ANSWER_UNVERIFIED", f"{qid}: {decision}"
@@ -79,7 +79,7 @@ def main() -> None:
     print(f"  {just_under} (just under) -> ANSWER_UNVERIFIED")
 
     print("\nclearly far out-of-domain:")
-    far = 1.7829  # the largest class-1 OOD top-1 distance recorded in bc1e261
+    far = 1.7829  # the largest class-1 OOD top-1 distance recorded in 0ce3a1f
     decision = far_field_gate(_retrieval(far))
     assert decision.verdict == "ABSTAIN_OUT_OF_DOMAIN", decision
     print(f"  {far} -> {decision.verdict}")

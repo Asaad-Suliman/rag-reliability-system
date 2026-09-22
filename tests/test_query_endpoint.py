@@ -11,7 +11,7 @@ would embed the question, which costs money and needs the network, and would
 read `tests/fixtures/query_embeddings.json`, which is untracked and rewritten on
 any cache miss. Everything downstream of the stub is the committed code path:
 `far_field_gate()`, the response model, the router, the validators, the handlers.
-Distances are literals quoted from commit `bc1e261`.
+Distances are literals quoted from commit `0ce3a1f`.
 
 **The LLM is `FakeLLMClient`; the token counter is the REAL `TiktokenCounter`.**
 Not `HeuristicCharCounter`: chunk 8.6 found that substituting the heuristic in a
@@ -64,7 +64,7 @@ from app.services.context_budget import ContextBudget, TiktokenCounter
 from app.services.generation import FakeLLMClient, GenerationFailed, GenerationUpstreamError
 from app.services.retrieval import FAR_FIELD_ABSTAIN_DISTANCE, Retrieval, RetrievedChunk
 
-# Quoted from commit `bc1e261`. IN_BAND is a01's top-1 distance minus a hair —
+# Quoted from commit `0ce3a1f`. IN_BAND is a01's top-1 distance minus a hair —
 # a01 itself is the constant and is refused. FAR_FIELD is the largest class-1
 # out-of-domain top-1 distance recorded.
 IN_BAND = 1.0489  # the answerable median
@@ -191,7 +191,7 @@ def _client(
 
 # T7 (SPEC-injection-scanner §7). The secondary baseline is pinned in
 # docs/DECISIONS.md, "injection_scanner T7 secondary baseline": the same request's
-# body at a HEAD where app/ differed from c788210 only by the unwired scanner.
+# body at a HEAD where app/ differed from 12093fb only by the unwired scanner.
 T7_FIXTURE = Path(__file__).parent / "fixtures" / "injection_scanner.json"
 T7_PINNED_BODY_SHA256 = "83c6c1392cbd19e963032dc700c56e2ec79227f083de540e4336bc0edbf4bab4"
 T7_SENTINEL = "SENTINEL-7f3a"
