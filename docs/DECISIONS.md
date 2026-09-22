@@ -468,46 +468,6 @@ the backticks are authoritative, even where a GFM renderer splits the cell.
 
 ---
 
-## 2026-09-18 — Chunk 8.14 Pass C1 — devbrain-search no longer reports every Qdrant failure as "unreachable": the bare except at `server.py:84` is replaced by six MRO-ordered handlers; the catch-all backstop is RETAINED
-
-> **Status: FIXED and verified.** Connection-refused and 404 observed live; every other failure mode verified by fault injection only.
-
-**Defect.** `services/mcp-qdrant/server.py:84-85` caught bare `Exception` and raised `Qdrant unreachable at {url} — is the service running?` with no `from`. Observed live: with Qdrant up and answering `404 Not Found` for a missing collection, the user was told the service was unreachable.
-
-**Method.** Preregistered in `PREREG-C1.md` (sha256 `ea300a7c9e2d6f514ef7f4e85bcd6cc98dbaf90eb37687500a5f2c841c7b5725`) and amended in `AMENDMENT-C1-1.md` (sha256 `c2069d3369ae23d8da22b9cc102de0a8f8b261e0abee31af3519088783e2aef8`), both frozen before any source change. The prereg replaced the runbook's handler table, which had been written from an unverified reading. Every correction was established by executing the real qdrant-client 1.18.0 code path: the wrapped transport error is on `ResponseHandlingException.source`, not `__cause__` (`api_client.py:136` raises without `from`); a 429 without `Retry-After` arrives as `UnexpectedResponse(429)`; a malformed `Retry-After` raises `QdrantException`. Handler order was derived from the installed MROs, and a shadow check was computed from the installed file's AST: PASS. Versions are pinned in a new `services/mcp-qdrant/requirements.txt`, because the service had no dependency manifest.
-
-**Decision.** Six handlers, each `as e` and `raise ToolError(...) from e`: connectivity (source `ConnectError`/`ConnectTimeout`) · other request failure · non-2xx by status (404 reported as ambiguous, auth, 429, other) · rate-limited with `retry_after_s` · `QdrantException` · `KeyError` guarded to the three config keys the try block reads · backstop.
-
-**Reasoning.** The backstop is kept deliberately. Without it, an unanticipated exception would take down the stdio server instead of returning `isError=True`. The defect was that the catch-all lied about the cause, not that it existed. It now names the real type. The `KeyError` guard trades a specific message for an honest one. The 404 message reports rather than asserts, because a wrong URL path produces the same status.
-
-**Verification.** `test_server_errors.py` (new, 16 fault-injection cases through an in-memory MCP session) PASS. The same tests FAIL against the pre-fix `server.py`, which is the negative control. `test_p2_unreachable_is_error` is repaired to be deterministic (it previously failed at `:108` with both backends up). It now tests handling, not outage; a real outage is covered only by `test_p2_live_backend_down --live`, which passed once with Qdrant stopped. The live stop/start of the container left 1898 points / 223 files / 0/0/0 byte-identical; the next cycle embedded 0 chunks.
-
-**Finding.** Three inference chains in this work were refuted by execution: the B4 timer defect, the `:109` prediction, and `__cause__`. Readings of library behaviour in this codebase have a poor track record against observation. Claims about control flow should be executed rather than reasoned about.
-
-**Evidence pointer.** `REPORT-C1.md`, sha256 `06a8554111800705de86fdc85476c890a3ce58e48ed7dba9d3d52b7d1ea8151f`, archived under `rag-reliability/passes/chunk814-c1/`.
-
-**Scope limit — what this does NOT establish.** Auth, timeouts, 429 in either form, 5xx, malformed bodies and KeyErrors were never produced by a real Qdrant. ConnectTimeout was never observed live. 404 cannot distinguish a missing collection from a wrong path. `requirements.txt` was not install-tested. The same `except Exception` pattern at `services/ingest/ingest.py:145` and `services/agents/research_agent.py:271` is out of scope and unchanged.
-
----
-
-## 2026-09-18 — Chunk 8.14 Phase B4 — A5 ESTABLISHED: the ingest deletes Qdrant points for a note removed from disk, by direct point-ID retrieval
-
-> **Status: ESTABLISHED by direct observation.** Scope is deliberately narrow; see the scope limit below.
-
-**Claim (A5).** When a `.md` note is removed from the vault, the next ingest cycle removes that note's points from the Qdrant `devbrain` collection. Until B4 this path had never run against a real orphan — every prior measurement showed 0 orphans.
-
-**Method.** Predictions frozen before any mutation in `PREREG-B4.md` (sha256 `8ef6675d0bd0520c63200635b644811385c9bf7bc70bdf8193ab8d842fdf91bd`) and `AMENDMENT-B4-1.md` (sha256 `162b18ee23e3dd87418deabe28120fac7b15779b9673efcb0003b8e66f8eddf9`), both re-verified unchanged at preflight. `vault-commit.timer` was stopped so every cycle was started by hand and attributable. A probe note of frozen content (sha256 `917b5e06…`, 3 chunks) was written to the vault root; its three point IDs were computed offline as `uuid5(NAMESPACE_URL, "path#i")` *before* the note existed. Cycle 1 (P2) ingested it; the note was then deleted and cycle 2 (P3) run. Counts came from a read-only scroll of the collection reused from B3 P6, plus an on-disk reconcile using `ingest.py`'s own scan rules.
-
-**Result.** Points 1819 → 1822 → **1819**; files 212 → 213 → **212**; orphans/missing/hash-mismatch 0/0/0 throughout. The load-bearing evidence is not the count: the three IDs `569f2566-bd49-587d-9b31-aca870fe9047`, `79f7f3cb-ccec-528c-a9f2-f397ef42b0f7` and `37b9bc97-5137-5b79-9855-e04a4c3e6cb3` were **FOUND** by direct ID retrieval at P2 and **ABSENT** at P3. A filtered scroll on the probe's `file_path` returned 0 points, and the full scroll dump contained 0 rows for it. The P3 cycle logged `Changed: 0 | Chunks embedded: 0` — nothing was re-embedded, so the drop came through the deletion path alone. A per-file diff of the 212 other files before the probe existed and after it was removed was byte-identical: the deletion was surgical. The code is the orphan sweep at `services/ingest/ingest.py:152-154`, calling `delete_file_points` at `:118-124`.
-
-**Verdict.** **A5: ESTABLISHED.**
-
-**Evidence pointer.** `REPORT-B4.md`, sha256 `872080ff8bd80a05ab3d630cc4c5b5fe3c12578d7dd215531482330304fbae77`, with the raw per-stage outputs it names.
-
-**Scope limit — what this does NOT establish.** Deletion was exercised once, for one file with 3 chunks, in a single cycle, with the vault otherwise quiet. Multi-file deletion in one cycle, partial-batch failure (`client.delete` succeeding for some orphans and raising for others mid-loop), deletion racing a concurrent write, deletion of a file spanning many chunks, and on-disk reclamation of the freed points all remain unobserved and are not licensed by this result.
-
----
-
 ## 2026-09-15 — Chunk 8.13 Phase A — `FarFieldVerdict` consumer inventory: ENUMERATES is zero across 115 sites; exactly one runtime hazard (`_VERDICT_MEANING`, conditional); zero gate hazards
 
 > **Status: RECORDED. No repository file is modified by this chunk.** No `.py`, test, prompt or schema file changed. No gate was run, and no network, paid or Anthropic call was made.
@@ -638,13 +598,13 @@ The full text is in `chunk812a-recipe_prereg.md`; the executable form is
   `format_report` prints the relative golden-set path.
 - **Environment:** `env -i` plus a single `ENV_ALLOW` array, shared by the assertions and
   every command:
-  - `HOME=/home/asaad`
-  - `PATH=/home/asaad/.local/bin:/usr/local/bin:/usr/bin:/bin`
+  - `HOME=$HOME`
+  - `PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin`
   - `LC_ALL=C.UTF-8`, `LANG=C.UTF-8`, `PYTHONIOENCODING=utf-8`
   - `PYTHONHASHSEED=0`, `PYTHONOPTIMIZE=` (empty)
   - `TZ=UTC`, `TERM=dumb`, `COLUMNS=80`, `NO_COLOR=1`
   - `HF_HUB_OFFLINE=1`, `UV_NO_SYNC=1`
-  - Commands run as `/home/asaad/.local/bin/uv run --no-sync <command>`.
+  - Commands run as `$HOME/.local/bin/uv run --no-sync <command>`.
 - **Hash:** `sha256sum "$OUT/gate-combined.txt" | cut -d' ' -f1`.
 
 **Where "exactly the allowlist" holds.**
@@ -1466,7 +1426,7 @@ changed.
 ### H. Correction to the 8.10a brief
 
 **Contradiction 6 was wrong.** It claimed `rag-reliability/passes/` does not
-exist in the vault. It does — `/home/asaad/Documents/DevBrain/rag-reliability/passes/`,
+exist in the vault. It does — the vault's `rag-reliability/passes/`,
 holding every pass report from `chunk71g` to `chunk89`. 8.10a's Step 0 therefore
 scanned `01_Projects/` instead. Harmless in effect: no vault commits followed
 `77629b6`, so the scan had nothing to miss. Recorded so the next chunk looks in
@@ -2431,7 +2391,7 @@ three obligations remain unmet.
 
 **Provenance.** A pass report was reported at `/tmp/chunk81d/contract-amendment.md`. That directory
 exists and is empty. `grep -rln` over the vault's
-`/home/asaad/Documents/DevBrain/rag-reliability/passes/` and over `/tmp/` returns no copy of the
+`rag-reliability/passes/` and over `/tmp/` returns no copy of the
 report. Every hit is one of three kinds: the five surviving chunk-8.1 artifacts and prior-session
 scratch copies, both matching on the decision heading; or drafts of this entry, which match only
 because this sentence contains the path string it searches for. The total is not recorded here — it
