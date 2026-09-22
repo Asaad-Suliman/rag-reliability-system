@@ -22,12 +22,13 @@ import inspect
 import json
 import re
 import sys
+import unittest
 from collections.abc import Callable
 from pathlib import Path
 
 from app.services import generation
 from app.services.generation import CONTEXT_CLOSE, CONTEXT_OPEN
-from app.services.vector_store import _load_corpus
+from tests.corpus_text import load_corpus_with_text
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = json.loads((ROOT / "tests" / "fixtures" / "injection_scanner.json").read_text())
@@ -78,8 +79,8 @@ def _n1_inputs() -> list[tuple[str, str]]:
     ]
     t7 = FIXTURES["t7_request"]
     inputs += [("t7.question", t7["question"]), ("t7.chunk_text", t7["chunk_text"])]
-    corpus = _load_corpus(ROOT / "app" / "corpus")
-    inputs += list(zip(corpus.ids, corpus.documents, strict=True))
+    corpus, documents = load_corpus_with_text()
+    inputs += list(zip(corpus.ids, documents, strict=True))
     return inputs
 
 
@@ -129,15 +130,20 @@ def test_n3_oracle_discriminates() -> bool:
 
 
 def main() -> None:
-    results = {
-        "N1": test_n1_differential(),
-        "N2": test_n2_variants_neutralised(),
-        "N3": test_n3_oracle_discriminates(),
-    }
+    results: dict[str, bool] = {}
+    try:
+        results["N1"] = test_n1_differential()
+    except unittest.SkipTest as skip:
+        print(f"SKIP: N1 — {skip}")
+    results["N2"] = test_n2_variants_neutralised()
+    results["N3"] = test_n3_oracle_discriminates()
     failed = [name for name, ok in results.items() if not ok]
     if failed:
         print(f"\nFAIL: neutralise_variants — {', '.join(failed)}")
         sys.exit(1)
+    if "N1" not in results:
+        print("\nok: neutralise_variants — N2, N3 (N1 SKIPPED: no local corpus text)")
+        return
     print("\nok: neutralise_variants — N1, N2, N3")
 
 

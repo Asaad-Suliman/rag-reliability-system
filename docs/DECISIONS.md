@@ -16,6 +16,19 @@ Newest entries first.
 
 ---
 
+## 2026-09-22 — Corpus chunk text moved out of the repository: `corpus_vectors.json` keeps ids, offsets and hashes; text is a local-only file; text-dependent tests SKIP without it
+
+> **Status: DONE.** No pattern, fixture value, expected value or measured figure changes.
+
+- **Why.** `app/corpus/corpus_vectors.json` carried the full text of all 260 chunks (273,489 characters) of a third-party book. It must not be in a public repository.
+- **Split.** The committed manifest keeps `collection`, `dimensions`, `count`, `vectors_sha256`, a new `texts_sha256`, and per record `id`, `document_id`, `page`, `char_start`, `char_end`. The text moves to `data/corpus_text.json` (`{chunk_id: text}`, gitignored by `.gitignore:18`), pinned by `texts_sha256` = `c01358a275ff01979af5a981aeed4f02640c9b1e296e1d6072bd363abe1f66a6` (sha256 of the file bytes). `corpus_vectors.npy` and `vectors_sha256` are unchanged. The stripped manifest plus the text file rebuild the pre-split manifest byte for byte (OBSERVED, checked before writing). `scripts/export_vectors.py` now writes the same two-file layout.
+- **Loader.** `_load_corpus` returns `documents=None` when the text file is absent. Present but not matching the pin, or with ids out of manifest order, raises `CorpusUnavailableError`. `ExactVectorStore.query` raises `CorpusUnavailableError` when the text is absent: vector and hybrid retrieval need it, so `/query` is a 503 and the CLI exits 4 (`refused:`). Lexical-only retrieval reads Postgres and is unaffected.
+- **Skip rule.** Tests that need chunk text get it through `tests/corpus_text.py`, which raises `unittest.SkipTest` when the file is absent. pytest reports a skip; under `python -m`, each module's `main()` prints `SKIP:` and exits 0. Affected: T4a/T4b and T6 (`tests.test_injection_scanner`), C1 (`tests.test_header_defang`), N1 (`tests.test_neutralise_variants`), and `tests.test_vector_search_stability`. A skip is not a pass: these checks are established only on a machine that has the text file.
+- **Verification (OBSERVED).** With the text file present, all 9 `tests.*` modules, the self-checks `app.services.{retrieval,evaluation,reranking,vector_store}`, `scripts.verify_golden_set`, `app.cli evaluate` and pytest exit 0, and every output is byte-identical to a pre-change baseline, apart from the pytest wall time and a rate-limit reset timestamp, which also differ between two baseline runs. That set includes all four gate commands (8.9 §E). With the file moved away: pytest 23 passed, 4 skipped; the four modules above SKIP and exit 0; `app.services.retrieval` and `app.cli evaluate` refuse with the message above.
+- **Not established here:** the gate hash. It needs the local text file and is run by Asaad.
+
+---
+
 ## 2026-09-19 — `injection_scanner` chunk (c) E′ RESULTS — H1–H9, C1 PASS; T1–T7 PASS under the amendment; first run STOPPED at T2 as recorded
 
 > **Status: DONE, pending gate `after-c`.** Pre-registration: the entry "chunk (c) enforcement policy E′ — PRE-REGISTERED" (commit `14fd471`), as amended by "chunk (c) E′ AMENDMENT" (commit `fade362`). RB-10.

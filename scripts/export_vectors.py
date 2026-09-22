@@ -12,14 +12,17 @@ search over these 260 vectors is deterministic, 19x faster and needs 1.02 MiB
 (chunk 7.1g). This script is the one-way door: after it, the index directory is
 dead weight.
 
-Output, both in `--out`:
+Output:
 
-  corpus_vectors.npy   (260, 1024) float32, C-contiguous, unit-norm
-  corpus_vectors.json  row-order id manifest + the per-chunk metadata and
-                       document text Chroma used to return alongside each hit
+  --out/corpus_vectors.npy   (260, 1024) float32, C-contiguous, unit-norm
+  --out/corpus_vectors.json  row-order id manifest + the per-chunk metadata
+  --text-out                 {chunk_id: text}, the document text Chroma used to
+                             return alongside each hit. Book text: gitignored,
+                             never committed.
 
-The two are paired by row index: `manifest["records"][i]` describes row `i` of
-the matrix. `manifest["vectors_sha256"]` pins the matrix bytes.
+The first two are paired by row index: `manifest["records"][i]` describes row
+`i` of the matrix. `manifest["vectors_sha256"]` pins the matrix bytes and
+`manifest["texts_sha256"]` pins the text file's bytes.
 """
 
 from __future__ import annotations
@@ -43,8 +46,10 @@ _METADATA_KEYS = ("document_id", "page", "char_start", "char_end")
 _DOCUMENT_KEY = "chroma:document"
 
 
-def _read_index(chroma_dir: Path) -> tuple[list[dict[str, Any]], np.ndarray, str, int]:
-    """Returns (records, matrix, collection_name, dimensions)."""
+def _read_index(
+    chroma_dir: Path,
+) -> tuple[list[dict[str, Any]], dict[str, str], np.ndarray, str, int]:
+    """Returns (records, texts, matrix, collection_name, dimensions)."""
     uri = f"file:{chroma_dir / 'chroma.sqlite3'}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
@@ -89,14 +94,10 @@ def _read_index(chroma_dir: Path) -> tuple[list[dict[str, Any]], np.ndarray, str
         np.float32
     )
     records = [
-        {
-            "id": chunk_id,
-            **{k: meta[chunk_id][k] for k in _METADATA_KEYS},
-            "document": meta[chunk_id][_DOCUMENT_KEY],
-        }
-        for chunk_id in live_ids
+        {"id": chunk_id, **{k: meta[chunk_id][k] for k in _METADATA_KEYS}} for chunk_id in live_ids
     ]
-    return records, np.ascontiguousarray(matrix), collection_name, int(dimensions)
+    texts = {chunk_id: meta[chunk_id][_DOCUMENT_KEY] for chunk_id in live_ids}
+    return records, texts, np.ascontiguousarray(matrix), collection_name, int(dimensions)
 
 
 def main() -> None:
@@ -106,9 +107,11 @@ def main() -> None:
     # `data/`, so it swallows one at any depth and the artifact would silently
     # stop being tracked. A `!` negation cannot rescue that; see .gitignore.
     parser.add_argument("--out", type=Path, default=Path("app/corpus"))
+    # Deliberately under `data/`: the chunk text is book text and must stay untracked.
+    parser.add_argument("--text-out", type=Path, default=Path("data/corpus_text.json"))
     args = parser.parse_args()
 
-    records, matrix, collection_name, dimensions = _read_index(args.chroma_dir)
+    records, texts, matrix, collection_name, dimensions = _read_index(args.chroma_dir)
 
     norms = np.linalg.norm(matrix, axis=1)
     print(f"count            : {len(records)}")
@@ -124,6 +127,12 @@ def main() -> None:
     digest = hashlib.sha256(matrix.tobytes()).hexdigest()
     print(f"corpus sha256    : {digest}")
 
+    text_bytes = (json.dumps(texts, indent=2) + "\n").encode()
+    texts_digest = hashlib.sha256(text_bytes).hexdigest()
+    print(f"texts sha256     : {texts_digest}")
+
+    args.text_out.parent.mkdir(parents=True, exist_ok=True)
+    args.text_out.write_bytes(text_bytes)
     args.out.mkdir(parents=True, exist_ok=True)
     np.save(args.out / VECTORS_FILENAME, matrix, allow_pickle=False)
     (args.out / MANIFEST_FILENAME).write_text(
@@ -133,14 +142,15 @@ def main() -> None:
                 "dimensions": dimensions,
                 "count": len(records),
                 "vectors_sha256": digest,
+                "texts_sha256": texts_digest,
                 "records": records,
             },
             indent=2,
         )
         + "\n"
     )
-    for name in (VECTORS_FILENAME, MANIFEST_FILENAME):
-        print(f"wrote {args.out / name}  ({(args.out / name).stat().st_size} bytes)")
+    for path in (args.out / VECTORS_FILENAME, args.out / MANIFEST_FILENAME, args.text_out):
+        print(f"wrote {path}  ({path.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

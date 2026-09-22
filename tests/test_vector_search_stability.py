@@ -31,11 +31,13 @@ import asyncio
 import json
 import subprocess
 import sys
+import unittest
 from typing import Any
 
 from app.services.embeddings import FakeEmbedder
 from app.services.evaluation import GOLDEN_SET_PATH, load_golden_set, load_query_vectors
 from app.services.vector_store import ExactVectorStore, VectorStore
+from tests.corpus_text import load_corpus_with_text
 
 WORKERS = 12
 TOP_K = 40
@@ -99,6 +101,13 @@ def main() -> None:
 
     if args.worker:
         print(json.dumps(asyncio.run(_run_worker())))
+        return
+
+    # `ExactVectorStore.query` refuses without the local-only chunk text.
+    try:
+        load_corpus_with_text()
+    except unittest.SkipTest as skip:
+        print(f"SKIP: cross-process stability — {skip}")
         return
 
     assert args.workers >= 10, f"cross-process stability needs >= 10 processes, got {args.workers}"

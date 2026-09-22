@@ -168,6 +168,15 @@ CORPUS_DIR = Path(__file__).resolve().parent.parent / "corpus"
 VECTORS_FILENAME = "corpus_vectors.npy"
 MANIFEST_FILENAME = "corpus_vectors.json"
 
+# The chunk text is third-party book text, so it is NOT committed: it lives in a
+# gitignored local file, pinned by `texts_sha256` in the manifest. Without it the
+# ids, offsets and vectors still load; only a caller that needs text is refused.
+CORPUS_TEXT_PATH = Path(__file__).resolve().parents[2] / "data" / "corpus_text.json"
+CORPUS_TEXT_MISSING = (
+    f"corpus text not present locally ({CORPUS_TEXT_PATH}); the chunk text is kept out of "
+    "the repository, and vector/hybrid retrieval needs it"
+)
+
 # The corpus is frozen: 260 vectors, voyage-4-lite, never to be re-embedded.
 # A different count means the artifact is not the one every committed figure
 # was measured against, so the store refuses to answer rather than answering
@@ -189,10 +198,31 @@ class _Corpus:
     ids: list[str]
     matrix: np.ndarray
     metadatas: list[dict[str, Any]]
-    documents: list[str]
+    documents: list[str] | None  # None when the local text file is absent
 
 
-def _load_corpus(corpus_dir: Path) -> _Corpus:
+def _load_texts(text_path: Path, pinned_sha256: str, ids: list[str]) -> list[str] | None:
+    """The chunk text in row order, or None if the local file is absent.
+
+    Present but wrong is fatal, never treated as absent: text that does not match
+    the pin would be served as citations that look identical to real ones.
+    """
+    if not text_path.is_file():
+        return None
+    raw = text_path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != pinned_sha256:
+        raise CorpusUnavailableError(
+            f"{text_path} does not match the digest pinned in the manifest:\n"
+            f"  pinned {pinned_sha256}\n  actual {digest}"
+        )
+    texts: dict[str, str] = json.loads(raw)
+    if list(texts) != ids:
+        raise CorpusUnavailableError(f"{text_path} ids do not match the manifest's row order")
+    return [texts[i] for i in ids]
+
+
+def _load_corpus(corpus_dir: Path, text_path: Path = CORPUS_TEXT_PATH) -> _Corpus:
     vectors_path = corpus_dir / VECTORS_FILENAME
     manifest_path = corpus_dir / MANIFEST_FILENAME
     for path in (vectors_path, manifest_path):
@@ -223,14 +253,15 @@ def _load_corpus(corpus_dir: Path) -> _Corpus:
             f"expected float32 x {manifest['dimensions']}, found {matrix.dtype} {matrix.shape}"
         )
 
+    ids = [r["id"] for r in records]
     return _Corpus(
         collection=manifest["collection"],
-        ids=[r["id"] for r in records],
+        ids=ids,
         matrix=np.ascontiguousarray(matrix),
         metadatas=[
             {k: r[k] for k in ("document_id", "page", "char_start", "char_end")} for r in records
         ],
-        documents=[r["document"] for r in records],
+        documents=_load_texts(text_path, manifest["texts_sha256"], ids),
     )
 
 
@@ -305,6 +336,9 @@ class ExactVectorStore:
         # Not dispatched to a worker thread, unlike Chroma: the whole search is
         # ~0.5 ms of numpy, and asyncio.to_thread costs more than that.
         corpus = self._get_corpus()
+        documents = corpus.documents
+        if documents is None:
+            raise CorpusUnavailableError(CORPUS_TEXT_MISSING)
         if collection_name != corpus.collection:
             raise CorpusUnavailableError(
                 f"collection {collection_name!r} requested but the frozen corpus is "
@@ -340,7 +374,7 @@ class ExactVectorStore:
                 id=corpus.ids[i],
                 distance=float(distances[i]),
                 metadata=dict(corpus.metadatas[i]),
-                document=corpus.documents[i],
+                document=documents[i],
             )
             for i in order
         ]

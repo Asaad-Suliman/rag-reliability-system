@@ -19,7 +19,8 @@ nothing here derives an expectation by running the code under test.
   * T6  determinism.
 
 No Postgres, no network, no embedder: the corpus comes from the frozen,
-digest-checked artifact via `_load_corpus`.
+digest-checked artifact via `_load_corpus`. Its chunk text is a local-only file;
+without it T4 and T6 SKIP (`tests/corpus_text.py`).
 """
 
 from __future__ import annotations
@@ -27,12 +28,13 @@ from __future__ import annotations
 import ast
 import json
 import re
+import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.agents.injection_scanner import PATTERNS, ScanResult, scan
 from app.services.provenance import render, render_header
-from app.services.vector_store import _load_corpus
+from tests.corpus_text import load_corpus_with_text
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = json.loads((ROOT / "tests" / "fixtures" / "injection_scanner.json").read_text())
@@ -79,7 +81,7 @@ def _chunk(text: str, chunk_id: str = "chunk_fixture") -> _Chunk:
 
 
 def _corpus_chunks() -> list[_Chunk]:
-    corpus = _load_corpus(ROOT / "app" / "corpus")
+    corpus, documents = load_corpus_with_text()
     return [
         _Chunk(
             chunk_id=cid,
@@ -90,7 +92,7 @@ def _corpus_chunks() -> list[_Chunk]:
             char_end=int(meta["char_end"]),
             text=text,
         )
-        for cid, meta, text in zip(corpus.ids, corpus.metadatas, corpus.documents, strict=True)
+        for cid, meta, text in zip(corpus.ids, corpus.metadatas, documents, strict=True)
     ]
 
 
@@ -237,9 +239,17 @@ def main() -> None:
     test_t1_positives()
     test_t2_spoofed_header_defanged_at_render()
     test_t3_negatives()
-    chunks = _corpus_chunks()
-    test_t4_corpus(chunks)
+    try:
+        chunks: list[_Chunk] | None = _corpus_chunks()
+    except unittest.SkipTest as skip:
+        chunks = None
+        print(f"SKIP: T4, T6 — {skip}")
+    if chunks is not None:
+        test_t4_corpus(chunks)
     test_t5_isolation()
+    if chunks is None:
+        print("\nok: injection_scanner — T1, T2, T3, T5 (T4, T6 SKIPPED: no local corpus text)")
+        return
     test_t6_determinism(chunks)
     print("\nok: injection_scanner — T1, T2, T3, T4a, T5, T6 (T4b measured above)")
 

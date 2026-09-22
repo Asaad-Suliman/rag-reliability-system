@@ -13,6 +13,7 @@ the genuine header — whatever the bodies contain.
 
 from __future__ import annotations
 
+import unittest
 from dataclasses import dataclass
 
 from app.agents.injection_scanner import PATTERNS
@@ -22,7 +23,7 @@ from app.services.provenance import (
     render_block,
     render_header,
 )
-from app.services.vector_store import CORPUS_DIR, _load_corpus
+from tests.corpus_text import load_corpus_with_text
 
 IS_01 = PATTERNS["IS-01"]
 
@@ -179,7 +180,7 @@ def test_h9_negative_control() -> None:
 
 
 def test_c1_frozen_corpus_unchanged() -> None:
-    documents = _load_corpus(CORPUS_DIR).documents
+    _, documents = load_corpus_with_text()
     assert len(documents) == 260, len(documents)
     for d in documents:
         assert _defang_header_open(d) == d
@@ -196,7 +197,12 @@ def main() -> None:
     test_h7_passthrough()
     test_h8_citations_unchanged()
     test_h9_negative_control()
-    test_c1_frozen_corpus_unchanged()
+    try:
+        test_c1_frozen_corpus_unchanged()
+    except unittest.SkipTest as skip:
+        print(f"SKIP: C1 — {skip}")
+        print("\nok: header defang — H1–H9 (C1 SKIPPED: no local corpus text)")
+        return
     print("\nok: header defang — H1–H9, C1")
 
 
