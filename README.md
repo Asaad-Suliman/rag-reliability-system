@@ -165,7 +165,8 @@ uv run python -m app.cli query "your question here"
 
 **Ingest does not work on the current code, because the vector store is frozen.** Since chunk 7.2,
 the vector arm reads a tracked, read-only corpus in `app/corpus/` (260 vectors, pinned by
-sha256). `ExactVectorStore` refuses every write. Step 8 therefore spends the Voyage embedding
+sha256). Its chunk text is not committed, so on a fresh clone step 9 (hybrid by default) is
+refused; see [Reproducibility](#reproducibility). `ExactVectorStore` refuses every write. Step 8 therefore spends the Voyage embedding
 call and is then refused with `CorpusUnavailableError` when it tries to store the vectors.
 `reindex` and `delete` are refused the same way. Adding a new document means re-embedding it
 under a writable store and re-running `scripts.export_vectors`, as the error message says.
@@ -325,14 +326,15 @@ uv run python -m app.cli evaluate --reranker local
 
 ### Reproducibility
 
-The published figures are a record of a measurement that no one, including the author, can re-run
-from this repository. The source PDF is not in the repository and no longer exists. The Postgres
-chunks it produced are not committed (`data/` is gitignored), and the canonical text cannot be
-rebuilt from them: 246 of 259 consecutive chunk pairs have gaps between them. The vectors are
-committed (`app/corpus/`), but `tests/fixtures/golden_set_v3.json` resolves every gold chunk by
-character offsets through document `doc_01M0D39WZDYY7STA3PHWT5R4C7`'s Postgres chunks, and the
-cached query embeddings (`tests/fixtures/query_embeddings.json`) are gitignored. On a fresh clone,
-`evaluate` stops with
+The published figures can be re-run only on the author's machine; nobody can re-run them from
+this repository alone. **Committed:** the 260 chunk vectors and their metadata (chunk id,
+document id, page, character offsets) in `app/corpus/`, the golden set's questions and offsets,
+and sha256 pins for every file held back. **Not committed:** the source PDF (a third-party book,
+no longer available); the chunk text and the golden set's snippets and answer substrings (book
+text, kept in the gitignored `data/corpus_text.json` and `data/golden_set_v3_text.json`); the
+Postgres database holding the ingested chunks; and the cached query embeddings
+(`tests/fixtures/query_embeddings.json`). Without the chunk text, vector and hybrid retrieval
+refuse to run and the text-dependent tests skip. On a fresh clone, `evaluate` stops with
 `refused: no chunks in the live corpus for document 'doc_01M0D39WZDYY7STA3PHWT5R4C7'`.
 
 ### Measured results
@@ -379,7 +381,7 @@ app/
 ├── cli.py           # ingest, query, reindex, stats, evaluate, delete
 ├── api/v1/          # routers — health, query
 ├── core/            # config, logging, errors, middleware, security (credential, limits)
-├── corpus/          # frozen vector corpus: 260 vectors + manifest, sha256-pinned
+├── corpus/          # frozen vector corpus: 260 vectors + manifest, sha256-pinned; text is local-only
 ├── db/              # async engine, session, models, id generation
 ├── documents/       # document status state machine
 ├── services/
