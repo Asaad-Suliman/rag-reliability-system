@@ -16,6 +16,17 @@ Newest entries first.
 
 ---
 
+## 2026-09-22 — Golden set v3 text fields moved to a local-only file; the recorded golden-set sha256 `2ca9c82b…` now names the recombined file
+
+> **Status: DONE.** No id, question, offset or other scored field changes. The evaluator reads none of the moved fields.
+
+- **Moved.** `snippet` (30 answerable entries), `near_miss_to.snippet` (6 near-miss entries) and `expected_answer_substring` (30 entries) leave `tests/fixtures/golden_set_v3.json` for the gitignored `data/golden_set_v3_text.json`, keyed by question id and pinned by the new top-level `texts_sha256` = `cbfbb31c80fe38d23c5130da480c15ee15aeff4f3f527deb2dac779411dd8336`. The field lines were removed textually; every other byte of the fixture is unchanged.
+- **Readers.** `app/services/evaluation.py` uses only ids, questions, `answerable`, `document_id` and offsets, so it is unchanged. `scripts/verify_golden_set.py` merges the local file back in. If the file is absent, the offsets are still verified and the snippet comparison prints `SKIP`. If it is present but does not match the pin, the script FAILs.
+- **Provenance.** `docs/chunk5-results.json` and `docs/chunk7-scores.json` record `golden_set.sha256` = `2ca9c82b263e73619c8896c6739739943a2b6affb351e8187f1a340e01ff2529`. That is the pre-split file. Re-inserting each field from the local file (`snippet` after `char_end`, `expected_answer_substring` after `page`) and dropping the `texts_sha256` line rebuilds those bytes exactly (OBSERVED). The recorded hash is therefore verifiable only with the local file.
+- **Also.** `docs/REVIEW-golden-set-v3.md` (u05, "Adjacent passage") now cites chunk `chk_01M0D4BMH0YEVX15HMY5B5SMP0` and offsets [224441, 224704) instead of quoting the passage.
+
+---
+
 ## 2026-09-22 — Corpus chunk text moved out of the repository: `corpus_vectors.json` keeps ids, offsets and hashes; text is a local-only file; text-dependent tests SKIP without it
 
 > **Status: DONE.** No pattern, fixture value, expected value or measured figure changes.

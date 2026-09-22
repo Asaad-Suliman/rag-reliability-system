@@ -1,6 +1,7 @@
 {
   "version": 3,
   "supersedes": 2,
+  "texts_sha256": "cbfbb31c80fe38d23c5130da480c15ee15aeff4f3f527deb2dac779411dd8336",
   "corpus": {
     "document_id": "doc_01M0D39WZDYY7STA3PHWT5R4C7",
     "filename": "Mastering RAG 2026_compressed.pdf",

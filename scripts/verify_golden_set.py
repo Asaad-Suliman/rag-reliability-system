@@ -9,12 +9,18 @@ They are therefore resolved through the chunk that contains them, which is exact
 `chunking.py` guarantees `canonical_text[c.char_start:c.char_end] == c.text`, so
 `c.text[start - c.char_start : end - c.char_start]` is the canonical slice.
 
+The snippets and expected answer substrings are third-party book text, so they
+are not committed: they live in the gitignored `data/golden_set_v3_text.json`,
+pinned by the golden set's `texts_sha256`, and are merged back in here. Without
+that file the offsets are still verified and the snippet comparison is skipped.
+
 Every failure is collected and printed. The exit code is 1 if any check failed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sys
 from collections.abc import Sequence
@@ -27,6 +33,32 @@ from app.core.config import get_settings
 from app.db.session import create_engine, create_session_factory
 
 DEFAULT_PATH = Path("tests/fixtures/golden_set_v3.json")
+TEXT_PATH = Path("data/golden_set_v3_text.json")
+
+
+def _merge_texts(golden: dict[str, Any], text_path: Path) -> bool:
+    """Merge the local-only text fields into `golden["entries"]` in place.
+
+    False if the file is absent. Present but not matching the pin raises: a wrong
+    snippet would make every comparison below meaningless.
+    """
+    if not text_path.is_file():
+        return False
+    raw = text_path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != golden["texts_sha256"]:
+        raise ValueError(
+            f"{text_path} does not match the golden set's texts_sha256:\n"
+            f"  pinned {golden['texts_sha256']}\n  actual {digest}"
+        )
+    texts: dict[str, dict[str, Any]] = json.loads(raw)
+    for entry in golden["entries"]:
+        fields = dict(texts.get(entry["id"], {}))
+        near_miss = fields.pop("near_miss_to", None)
+        entry.update(fields)
+        if near_miss is not None:
+            entry["near_miss_to"].update(near_miss)
+    return True
 
 
 def _check_span(
@@ -39,7 +71,7 @@ def _check_span(
     """Offsets must fall inside exactly one chunk, and the text there must equal
     `snippet` byte for byte. No normalisation — whitespace differences are drift.
     """
-    start, end, snippet = span["char_start"], span["char_end"], span["snippet"]
+    start, end, snippet = span["char_start"], span["char_end"], span.get("snippet")
 
     if end <= start:
         failures.append(f"{entry_id}: {label} char_end ({end}) is not after char_start ({start})")
@@ -55,6 +87,9 @@ def _check_span(
             else "no chunk covers this range at all"
         )
         failures.append(f"{entry_id}: {label} [{start},{end}) does not resolve — {detail}")
+        return
+
+    if snippet is None:  # local text file absent: offsets checked, text not compared
         return
 
     owner = owners[0]
@@ -74,6 +109,16 @@ async def main() -> int:
         return 1
 
     golden = json.loads(path.read_text())
+    try:
+        have_text = _merge_texts(golden, TEXT_PATH)
+    except ValueError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
+    if not have_text:
+        print(
+            f"SKIP: snippet comparison — {TEXT_PATH} not present locally (book text is kept out "
+            "of the repository); offsets are still verified"
+        )
     entries = golden["entries"]
     failures: list[str] = []
 
@@ -121,7 +166,8 @@ async def main() -> int:
                     for forbidden in ("near_miss_to", "why_unanswerable"):
                         if forbidden in entry:
                             failures.append(f"{eid}: answerable entry must not carry `{forbidden}`")
-                    missing = [k for k in ("char_start", "char_end", "snippet") if k not in entry]
+                    span_keys = ["char_start", "char_end"] + (["snippet"] if have_text else [])
+                    missing = [k for k in span_keys if k not in entry]
                     if missing:
                         failures.append(f"{eid}: answerable entry missing {', '.join(missing)}")
                     else:
@@ -144,10 +190,14 @@ async def main() -> int:
         return 1
 
     answerable = sum(1 for e in entries if e["answerable"])
+    checked = (
+        "all offsets resolve and every snippet matches exactly"
+        if have_text
+        else "all offsets resolve; snippets NOT checked (no local text file)"
+    )
     print(
         f"OK: {len(entries)} entries in {path} "
-        f"({answerable} answerable, {len(entries) - answerable} near-miss) — "
-        "all offsets resolve and every snippet matches exactly"
+        f"({answerable} answerable, {len(entries) - answerable} near-miss) — {checked}"
     )
     return 0
 
