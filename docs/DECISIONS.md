@@ -12,6 +12,9 @@ It is mirrored from a private working vault and may lag the code slightly.
 References to "the vault" are the author's private research notes, not included in this
 repository.
 
+Commit hashes in this file are pre-2026-09-22 hashes. History was rewritten that day to remove
+third-party book text, and `docs/HISTORY-REWRITE-2026-09.md` maps each old hash to its new one.
+
 Newest entries first.
 
 ---
