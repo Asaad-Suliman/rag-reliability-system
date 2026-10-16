@@ -33,6 +33,12 @@ The child gets a cold cache by running with its cwd set to an empty directory:
 different cwd is a missing cache. That is not a contrivance — it is exactly the
 production failure it stands in for: an image or a working directory that does
 not carry `models/tiktoken`.
+
+(1) needs the cache, which is gitignored and local-only (like the corpus text
+in `tests/corpus_text.py`). A clone without it SKIPs (1) rather than erroring;
+(2) needs no cache and always runs. Only an ABSENT or EMPTY cache directory
+skips: a directory that exists but fails to load is a real defect and still
+fails.
 """
 
 from __future__ import annotations
@@ -40,9 +46,11 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 from app.services.context_budget import (
+    TIKTOKEN_CACHE_DIR,
     ContextBudget,
     HeuristicCharCounter,
     TiktokenCounter,
@@ -51,6 +59,25 @@ from app.services.context_budget import (
 from app.services.retrieval import RetrievedChunk
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+CACHE_MISSING = (
+    f"tiktoken cache {TIKTOKEN_CACHE_DIR} is absent or empty (gitignored, local-only); "
+    "populate it with `uv run python -m scripts.fetch_tiktoken_cache --allow-network "
+    "--write-manifest`"
+)
+
+
+def _require_tiktoken_cache() -> None:
+    """SkipTest when the local cache directory is absent or empty.
+
+    Resolved against the cwd exactly as `TiktokenCounter` resolves it, so this
+    checks the same directory the default branch will load from. A directory
+    that exists with files in it is NOT skipped: if that fails to load, it is a
+    stale or non-matching cache, which is the defect this suite exists to catch.
+    """
+    cache = TIKTOKEN_CACHE_DIR
+    if not cache.is_dir() or not any(cache.iterdir()):
+        raise unittest.SkipTest(CACHE_MISSING)
 
 
 def _hit(chunk_id: str, text: str) -> RetrievedChunk:
@@ -100,6 +127,7 @@ def test_default_branch_is_taken() -> None:
     demoted heuristic. `counter_name` is the proof: `plan_context` records the
     counter that actually ran, so this cannot pass by accident.
     """
+    _require_tiktoken_cache()
     result = plan_context([_hit("chk_1", "hello world")], ContextBudget())
     assert result.counter_name == TiktokenCounter.name, result.counter_name
     assert result.counter_name != HeuristicCharCounter.name
@@ -131,10 +159,15 @@ def test_cold_cache_raises_from_the_default_branch() -> None:
 
 
 def main() -> None:
-    test_default_branch_is_taken()
+    try:
+        test_default_branch_is_taken()
+        branch = "branch taken"
+    except unittest.SkipTest as skip:
+        print(f"SKIP: default branch taken — {skip}")
+        branch = "branch check SKIPPED (no local cache)"
     test_cold_cache_raises_from_the_default_branch()
     print(
-        "\nok: plan_context's counter=None default is exercised — branch taken, "
+        f"\nok: plan_context's counter=None default — {branch}, "
         "and a cold cache refuses in a subprocess rather than passing vacuously"
     )
 
